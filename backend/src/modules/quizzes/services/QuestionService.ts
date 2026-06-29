@@ -9,8 +9,9 @@ import {UserQuizMetricsRepository} from '../repositories/providers/mongodb/UserQ
 import {MongoDatabase} from '#root/shared/database/providers/mongo/MongoDatabase.js';
 import {GLOBAL_TYPES} from '#root/types.js';
 import {ParameterMap} from '../question-processing/tag-parser/tags/Tag.js';
-import {BaseQuestion} from '../classes/transformers/Question.js';
+import {BaseQuestion, toReviewQuestionResponse} from '../classes/transformers/Question.js';
 import {IQuestionRenderView} from '../question-processing/renderers/interfaces/RenderViews.js';
+import {ReviewQuestionResponse} from '../interfaces/review.js';
 import {QuestionProcessor} from '../question-processing/QuestionProcessor.js';
 import {QuizRepository} from '../repositories/providers/mongodb/QuizRepository.js';
 import {ClientSession, ObjectId} from 'mongodb';
@@ -188,6 +189,20 @@ class QuestionService extends BaseService {
         attemptedByUsersCount,
       };
     });
+  }
+
+  /**
+   * Returns a student-facing question for the spaced-repetition review screen.
+   * Read-only — no transaction needed. Answer(s) are stripped.
+   */
+  public async getForReview(
+    questionId: string | ObjectId,
+  ): Promise<ReviewQuestionResponse> {
+    const question = await this.questionRepository.getById(questionId, undefined);
+    if (!question) {
+      throw new NotFoundError(`Question ${questionId} not found`);
+    }
+    return toReviewQuestionResponse(question as BaseQuestion);
   }
 
   public async update(

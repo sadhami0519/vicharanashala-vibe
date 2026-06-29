@@ -81,3 +81,10 @@ build/
 *txt
 
 /gcp-service-account.json
+
+# context files
+feature-context.md 
+feature-user-flow-backend.md
+vibe_local_setup_guide.md
+vibe_review_question_endpoint_prompt.md
+vibe_review_reminder_email_prompt.md

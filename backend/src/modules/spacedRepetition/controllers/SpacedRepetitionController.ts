@@ -75,7 +75,7 @@ class SpacedRepetitionController {
   ): Promise<ReviewItemResponse> {
     const { studentId } = params;
     const { questionId, quality } = body;
-    return this.spacedRepetitionService.submitReview(studentId, questionId, quality) as Promise<ReviewItemResponse>;
+    return this.spacedRepetitionService.submitReview(studentId, questionId, quality) as unknown as Promise<ReviewItemResponse>;
   }
 
   @OpenAPI({
@@ -95,7 +95,7 @@ class SpacedRepetitionController {
     @Params() params: StudentIdParam,
   ): Promise<ReviewItemResponse[]> {
     const { studentId } = params;
-    return this.spacedRepetitionService.getSchedule(studentId) as Promise<ReviewItemResponse[]>;
+    return this.spacedRepetitionService.getSchedule(studentId) as unknown as Promise<ReviewItemResponse[]>;
   }
 
   @OpenAPI({
@@ -115,7 +115,7 @@ class SpacedRepetitionController {
     @Params() params: StudentCourseParams,
   ): Promise<CourseRetentionResponse> {
     const { studentId, courseId } = params;
-    return this.spacedRepetitionService.getCourseRetention(studentId, courseId) as Promise<CourseRetentionResponse>;
+    return this.spacedRepetitionService.getCourseRetention(studentId, courseId) as unknown as Promise<CourseRetentionResponse>;
   }
 
   @OpenAPI({

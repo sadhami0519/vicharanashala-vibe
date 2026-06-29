@@ -2,6 +2,7 @@ import {getFromContainer} from 'routing-controllers';
 import {AutoEjectionEngine} from '#root/modules/ejectionPolicy/services/AutoEjectionEngine.js';
 import {DeleteCronService} from '#root/modules/courses/services/deleteCronService.js';
 import {initJobs} from '#root/bootstrap/jobs/index.js';
+import { scheduleReviewNotificationJob } from '#spacedRepetition/cron/reviewNotificationJob.js';
 
 export const startCron = () => {
   try {

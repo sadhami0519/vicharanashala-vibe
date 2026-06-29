@@ -4,7 +4,7 @@ import { SPACED_REPETITION_TYPES } from '../types.js';
 import { BaseService } from '#root/shared/classes/BaseService.js';
 import { MongoDatabase } from '#shared/database/providers/mongo/MongoDatabase.js';
 import { GLOBAL_TYPES } from '#root/types.js';
-import { ReviewItemRepository } from '../repositories/providers/mongodb/ReviewItemRepository.js';
+import { ReviewItemRepository } from '#spacedRepetition/repositories/index.js';
 import {
   IReviewItem,
   ISM2State,

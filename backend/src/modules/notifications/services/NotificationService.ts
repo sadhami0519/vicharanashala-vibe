@@ -11,6 +11,8 @@ import {GLOBAL_TYPES} from '#root/types.js';
 import {ICourseRepository} from '#root/shared/database/interfaces/ICourseRepository.js';
 import {EJECTION_POLICY_TYPES} from '#root/modules/ejectionPolicy/types.js';
 import {AppealRepository} from '#root/shared/database/providers/mongo/repositories/AppealRepository.js';
+import {MailService} from './MailService.js';
+import {ReviewReminderEmail} from '../classes/transformers/ReviewReminderEmail.js';
 
 @injectable()
 export class NotificationService {
@@ -25,6 +27,8 @@ export class NotificationService {
     private readonly courseRepo: ICourseRepository,
     @inject(EJECTION_POLICY_TYPES.AppealRepo)
     private readonly appealRepo: AppealRepository,
+    @inject(NOTIFICATIONS_TYPES.MailService)
+    private readonly mailService: MailService,
   ) {}
 
   // ── Core Methods ────────────────────────────────────────────────
@@ -189,6 +193,79 @@ export class NotificationService {
 
     await this.notificationRepo.create(notification, session);
   }
+  // ── Spaced Repetition Reminder ──────────────────────────────────
+
+  async notifyReviewReminder(
+    studentId: string,
+    courseIds: string[],
+    dueCount: number,
+  ): Promise<void> {
+    const courseCount = courseIds.length;
+    const courseLabel = courseCount === 1 ? '1 course' : `${courseCount} courses`;
+
+    // Build a readable course-name list for the message body (first 3 only).
+    // Names are fetched in parallel; if any fail they fall back to IDs.
+    const displayCourseIds = courseIds.slice(0, 3);
+    const courseNameResults = await Promise.allSettled(
+      displayCourseIds.map(cid => this.courseRepo.read(cid)),
+    );
+    const displayNames = courseNameResults
+      .map((r, i) =>
+        r.status === 'fulfilled' ? r.value?.name ?? displayCourseIds[i] : displayCourseIds[i],
+      );
+    const courseList =
+      displayNames.length < courseIds.length
+        ? displayNames.join(', ') + ` and ${courseIds.length - displayNames.length} more`
+        : displayNames.join(', ');
+
+    const notification: Omit<INotification, '_id'> = {
+      userId: new ObjectId(studentId),
+      type: 'review_reminder',
+      title: '📝 Time to review — memory refresh needed',
+      message:
+        `You have ${dueCount} question${dueCount === 1 ? '' : 's'} due for review ` +
+        `across ${courseLabel}: ${courseList}. ` +
+        `Regular review keeps knowledge strong — tap to start now.`,
+      read: false,
+      createdAt: new Date(),
+    };
+
+    await this.notificationRepo.create(notification);
+
+    // ── Email (best-effort) ─────────────────────────────────────────
+    try {
+      const student = await this.userRepo.findById(studentId);
+      if (!student?.email) {
+        console.warn(
+          `[ReviewReminder] No email on file for student ${studentId} — skipping email.`,
+        );
+        return;
+      }
+
+      const emailMessage = ReviewReminderEmail.createMessage({
+        studentEmail: student.email,
+        studentName: student.firstName,
+        dueCount,
+        courseNames: displayNames,
+        totalCourseCount: courseCount,
+      });
+
+      await this.mailService.sendMail(emailMessage);
+      console.log(
+        `[ReviewReminder] In-app + email sent for student ${studentId}: ` +
+        `${dueCount} item(s) due across ${courseCount} course(s).`,
+      );
+    } catch (err) {
+      // Fail-open: in-app notification is already created — log and continue.
+      console.warn(
+        `[ReviewReminder] Email send failed for student ${studentId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // ── Inactivity Warning ────────────────────────────────────────────
+
   async notifyInactivityWarning(
     userId: string,
     courseId: string,

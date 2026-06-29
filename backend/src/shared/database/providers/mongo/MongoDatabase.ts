@@ -65,16 +65,40 @@ export class MongoDatabase implements IDatabase<Db> {
   private async ensureIndexes(): Promise<void> {
   if (!this.database) return;
 
-  const auditCollection = this.database.collection("auditTrails");
-
+  const auditCollection = this.database.collection('auditTrails');
   await auditCollection.createIndex({
     actor: 1,
-    "context.courseId": 1,
-    "context.courseVersionId": 1,
+    'context.courseId': 1,
+    'context.courseVersionId': 1,
     createdAt: -1,
   });
+  console.log('AuditTrails indexes ensured');
 
-  console.log("AuditTrails indexes ensured");
+  // ── Spaced Repetition: review_items ──────────────────────────────
+  const reviewItemsCollection = this.database.collection('review_items');
+
+  // 1. Cron job queries: next_review_at <= now  →  scan-based without this
+  await reviewItemsCollection.createIndex(
+    { next_review_at: 1 },
+    { name: 'idx_review_items_next_review_at' },
+  );
+  console.log('review_items index: idx_review_items_next_review_at ensured');
+
+  // 2. Student dashboard: all review items for a student in a given course
+  await reviewItemsCollection.createIndex(
+    { student_id: 1, course_id: 1 },
+    { name: 'idx_review_items_student_course' },
+  );
+  console.log('review_items index: idx_review_items_student_course ensured');
+
+  // 3. Uniqueness guard: prevents double-seeding the same (student, question)
+  //    pair. The unique compound index causes insertMany to reject duplicates
+  //    so the double-seeding guard in seedSchedule() is backed by MongoDB.
+  await reviewItemsCollection.createIndex(
+    { student_id: 1, question_id: 1 },
+    { unique: true, name: 'idx_review_items_student_question_unique' },
+  );
+  console.log('review_items index: idx_review_items_student_question_unique ensured');
 }
 
   /**

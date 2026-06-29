@@ -32,6 +32,7 @@ import {
 import {OpenAPI, ResponseSchema} from 'routing-controllers-openapi';
 import {QUIZZES_TYPES} from '#quizzes/types.js';
 import {QuestionProcessor} from '#quizzes/question-processing/QuestionProcessor.js';
+import {ReviewQuestionResponse} from '#quizzes/interfaces/review.js';
 import {
   QuestionActions,
   getQuestionAbility,
@@ -400,6 +401,25 @@ class QuestionController {
       userId,
       body.status,
     );
+  }
+
+  /**
+   * GET /quizzes/questions/:questionId/review
+   *
+   * Student-accessible (JWT required, no ability check). Used by the
+   * spaced-repetition review screen to fetch question text + options.
+   * Answer(s) are NOT included in the response.
+   */
+  @OpenAPI({
+    summary: 'Get question for spaced-repetition review',
+    description:
+      'Returns question body + options without the correct answer. ' +
+      'Student-accessible; requires JWT but no additional permission.',
+  })
+  @Get('/:questionId/review')
+  @OnUndefined(200)
+  async getForReview(@Params() params: QuestionId): Promise<ReviewQuestionResponse> {
+    return this.questionService.getForReview(params.questionId);
   }
 
   @OpenAPI({
