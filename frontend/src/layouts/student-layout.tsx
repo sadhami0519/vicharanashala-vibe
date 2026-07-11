@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { logout } from "@/utils/auth"
 import { useNavigate, useLocation } from "@tanstack/react-router"
-import { LogOut, Menu, X, Bell, Brain } from "lucide-react"
+import { LogOut, Menu, X, Bell } from "lucide-react"
 import { AuroraText } from "@/components/magicui/aurora-text"
 import { useState, useRef, useEffect } from "react"
 import InviteDropdown from "@/components/inviteDropDown"
@@ -29,146 +29,6 @@ type Invite = {
 };
 
 export default function StudentLayout() {
-  const { user, isAuthReady } = useAuthStore()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const { getInvites } = useInvites(); // run after login
-  const { data: approvedNotifications = [] } = useGetUnreadApprovedRegistrations(user?.uid || '');
-  const { data: pendingStudentRegistrations = [] } = useGetPendingStudentRegistrations(user?.uid || '');
-  const { data: rejectedStudentRegistrations = [] } = useGetRejectedStudentRegistrations(user?.uid || '');
-
-  const [pendingInvites, setPendingInvites] = useState<any[]>([]);
-  const [showInvites, setShowInvites] = useState(false);
-  const [confirmLogout, setConfirmLogout] = useState(false);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const invitesRef = useRef<HTMLDivElement | null>(null);
-  const [selectedInvite, setSelectedInvite] = useState<Invite | null>(null);
-
-  const { hasNew: hasNewAnnouncements, markSeen: markAnnouncementsSeen } = useNewAnnouncementIndicator();
-  const pathname = location.pathname;
-
-  const [approvedNotificationsList, setApprovedNotificationsList] = useState<any[]>([]);
-  const [localRejectedRegistrations, setLocalRejectedRegistrations] = useState<any[]>([]);
-  const { token } = useAuthStore();
-const { data: enrollmentsData } = useUserEnrollments(1, 100, !!token && !!user?.uid);
-const enrollments = enrollmentsData?.enrollments ?? [];
-
-let hasHpSystem = false;
-enrollments.forEach(obj => {
-  if(obj.hpSystem === true && obj.status === "ACTIVE" && obj. 
-percentCompleted !== 100){
-    hasHpSystem = true;
-  }
-})
-
-  const isActive = (path: string) => {
-    if (path === "/student") return pathname === "/student";
-    return pathname === path || pathname.startsWith(path + "/");
-  };
-
-  // Sync local state with hook data
-  useEffect(() => {
-    if (approvedNotifications && approvedNotifications.length !== approvedNotificationsList.length) {
-      setApprovedNotificationsList(approvedNotifications);
-    }
-  }, [approvedNotifications, setApprovedNotificationsList,approvedNotificationsList]);
-
-  useEffect(() => {
-    if (rejectedStudentRegistrations) {
-      setLocalRejectedRegistrations(rejectedStudentRegistrations);
-    }
-  }, [rejectedStudentRegistrations]);
-
-  const handleLogout = () => {
-    logout()
-    navigate({ to: "/auth" })
-  }
-
-  const handleGoBack = () => {
-    window.history.back()
-  }
-
-  const { notifications: fetchedSystemNotifications = [], unreadCount: systemUnreadCount = 0 } =
-    useGetSystemNotifications(user?.uid || '', false, !!user?.uid);
-  const { mutate: markSystemRead } = useMarkSystemNotificationAsRead();
-  const { mutate: markAllSystemRead } = useMarkAllSystemNotificationsAsRead();
-
-  const invitationCount =
-    pendingInvites.length +
-    (approvedNotifications?.length || 0) +
-    (pendingStudentRegistrations?.length || 0) +
-    (rejectedStudentRegistrations?.length || 0);
-
-  useEffect(() => {
-    if (!isAuthReady || !user) return;
-
-    const toastShown = sessionStorage.getItem("inviteToastShown");
-    const notificationToastShown = sessionStorage.getItem("notificationToastShown");
-
-    const getUserInvites = async () => {
-      const result = await getInvites();
-      if (result.invites.length > 0) {
-        setPendingInvites(result.invites)
-
-        if (!toastShown) {
-          toast.info("You have a new invite! Check invites dropdown.", {
-            richColors: true,
-          });
-          sessionStorage.setItem("inviteToastShown", "true");
-        }
-      }
-    };
-
-    const checkNotifications = async () => {
-      // Comparison logic: if there are ANY unread approved notifications, show toast once per session
-      if (approvedNotifications && approvedNotifications.length > 0 && !notificationToastShown) {
-        toast.info("You have new course approvals! Check notifications.", {
-          richColors: true,
-        });
-        sessionStorage.setItem("notificationToastShown", "true");
-      }
-
-      // Clear flag ONLY if no notifications exist (allows toast to show next time if new ones arrive)
-      if (approvedNotifications && approvedNotifications.length === 0) {
-        sessionStorage.removeItem("notificationToastShown");
-      }
-    };
-
-    getUserInvites();
-    checkNotifications();
-
-  }, [user, isAuthReady, approvedNotifications.length]);
-
-  useEffect(() => {
-    if (!showInvites) return;
-
-    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
-      const target = event.target as Node | null;
-      if (selectedInvite) return;
-      // Don't close if the click is inside any open dialog portal
-      if ((target as Element)?.closest?.('[role="dialog"]')) return;
-      if (invitesRef.current && target && !invitesRef.current.contains(target)) {
-        setShowInvites(false);
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setShowInvites(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown, { passive: true } as any);
-    document.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown as any);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [showInvites, selectedInvite]);
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-background/95 bg-gray-50/50 dark:bg-orange-950/70">
 
@@ -240,27 +100,6 @@ percentCompleted !== 100){
               >
                 <Link to="/student/courses">
                   <span className="relative z-10">Courses</span>
-                </Link>
-              </Button>
-
-              <Button
-                variant="ghost"
-                size="sm"
-                className={`relative h-10 px-4 text-sm font-medium transition-all duration-300 hover:bg-gradient-to-r hover:from-accent/30 hover:to-accent/10 hover:text-accent-foreground hover:shadow-lg hover:shadow-accent/10 data-[state=active]:bg-gradient-to-r data-[state=active]:from-primary/10 data-[state=active]:to-primary/5 data-[state=active]:text-primary Phillips-before:absolute Phillips-before:inset-0 Phillips-before:rounded-md Phillips-before:bg-gradient-to-r Phillips-before:from-primary/5 Phillips-before:to-transparent Phillips-before:opacity-0 hover:before:opacity-100 Phillips-before:transition-opacity Phillips-before:duration-300 ${isActive("/student/review")
-                  ? "bg-gradient-to-r from-primary/10 to-primary/5 text-primary shadow-md Phillips-before:opacity-100"
-                  : ""
-                  }`}
-                asChild
-              >
-                {/* @ts-ignore */}
-                <Link
-                  to="/student/review/dashboard"
-                  aria-current={
-                    isActive('/student/review') ? 'page' : undefined
-                  }
-                >
-                  <Brain className="relative z-10 h-4 w-4 mr-2" aria-hidden="true" />
-                  <span className="relative z-10">Review</span>
                 </Link>
               </Button>
 
@@ -431,24 +270,6 @@ percentCompleted !== 100){
               >
                 <Link to="/student/courses">
                   <span>Courses</span>
-                </Link>
-              </Button>
-
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start h-10 px-4 text-sm font-medium transition-all duration-300 hover:bg-gradient-to-r hover:from-accent/30 hover:to-accent/10 hover:text-accent-foreground"
-                asChild
-                onClick={() => setIsMobileMenuOpen(false)}
-              >
-                <Link
-                  to="/student/review/dashboard"
-                  aria-current={
-                    isActive('/student/review') ? 'page' : undefined
-                  }
-                >
-                  <Brain className="h-4 w-4 mr-2" aria-hidden="true" />
-                  <span>Review</span>
                 </Link>
               </Button>
 

@@ -80,16 +80,3 @@ e2e/*.txt
 
 # Local Claude agents
 .github/agents/debugger.agent.md
-
-# OpenAPI spec extraction scratch (Berry's one-off tooling, not a project pipeline)
-backend/extract-output.html
-backend/openapi-augmented.json
-backend/scripts/extract-spec.cjs
-backend/scripts/extract-spec.py
-backend/scripts/parse-spec.cjs
-backend/scripts/build-augmented-spec.cjs
-backend/scripts/generate-spec-standalone.cjs
-backend/scripts/patch-schema.cjs
-
-# Ad-hoc agent scan scripts (path-hardcoded, dev-box-specific)
-/scripts/scan-*.ps1
