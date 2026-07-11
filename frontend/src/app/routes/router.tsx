@@ -32,7 +32,6 @@ import { NotFoundComponent } from '@/components/not-found'
 import { useCourseStore } from '@/store/course-store'
 // import CourseEnrollments from '../pages/teacher/course-enrollments'
 import CourseEnrollmentsContainer from '../pages/teacher/course-enrollments'
-import CourseEmotionAnalyticsPage from '../pages/teacher/course-emotion-analytics'
 import InvitePage from '../pages/teacher/invite'
 import GenerateSectionPage from '@/app/pages/teacher/create-job'
 import AISectionPage from '@/app/pages/teacher/AISectionPage';
@@ -70,6 +69,8 @@ import StudentSubmissions from '@/app/pages/student/hp-system/submissions'
 import StudentMyLedgerPage from '@/app/pages/student/hp-system/student-ledger'
 import StudentActivityDetail from '@/app/pages/student/hp-system/activity-detail'
 import NotificationsPage from '@/app/pages/shared/NotificationsPage'
+import ReviewSession from '@/app/pages/student/ReviewSession'
+import RetentionDashboard from '@/app/pages/student/RetentionDashboard'
 
 // Root route with error and notFound handling
 const rootRoute = new RootRoute({
@@ -333,12 +334,6 @@ const teacherCourseEnrollmentsRoute = new Route({
   component: CourseEnrollmentsContainer,
 });
 
-const teacherCourseEmotionAnalyticsRoute = new Route({
-  getParentRoute: () => teacherLayoutRoute,
-  path: '/courses/emotion-analytics',
-  component: CourseEmotionAnalyticsPage,
-});
-
 // Teacher Course Instructors route
 // const teacherCourseInstructorsRoute = new Route({
 //   getParentRoute: () => teacherLayoutRoute,
@@ -567,6 +562,21 @@ const studentHpSystemActivitiesDetailRoute = new Route({
   path: '/hp-system/$courseVersionId/$cohortId/activities/$activityId',
   component: StudentActivityDetail,
 });
+
+// Student review session route (spaced repetition — student-side)
+const studentReviewSessionRoute = new Route({
+  getParentRoute: () => studentLayoutRoute,
+  path: '/review',
+  component: ReviewSession,
+});
+
+// Student review retention dashboard route (spaced repetition — overview)
+const studentReviewDashboardRoute = new Route({
+  getParentRoute: () => studentLayoutRoute,
+  path: '/review/dashboard',
+  component: RetentionDashboard,
+});
+
 // export const studentCourseInviteRegistration = new Route({
 //   getParentRoute: () => studentLayoutRoute,
 //   path: "/course-registration/$versionId",
@@ -683,7 +693,6 @@ const routeTree = rootRoute.addChildren([
     teacherViewCourseRoute, teacherCourseFlagsRoute,
     teacherProfileRoute,
     teacherCourseEnrollmentsRoute,
-    teacherCourseEmotionAnalyticsRoute,
     teacherAudioManagerRoute,
     teacherAddCourseRoute,
     teacherCourseInviteRoute,
@@ -724,6 +733,8 @@ const routeTree = rootRoute.addChildren([
     studentHpSystemSubmissionsRoute,
     studentHpSystemLedgerRoute,
     studentNotificationsRoute,
+    studentReviewSessionRoute,
+    studentReviewDashboardRoute,
   ]),
   coursePageRoute,
 ]);

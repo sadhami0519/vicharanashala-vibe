@@ -185,6 +185,10 @@ const LETTER_KEYS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as const;
  */
 export function toReviewQuestionResponse(
   question: BaseQuestion,
+  quiz: {quizTitle: string | null; quizId: string | null} = {
+    quizTitle: null,
+    quizId: null,
+  },
 ): ReviewQuestionResponse {
   const base = {
     id: question._id?.toString() ?? '',
@@ -193,6 +197,8 @@ export function toReviewQuestionResponse(
     hint: question.hint,
     isParameterized: question.isParameterized,
     options: [] as ReviewOption[],
+    quizTitle: quiz.quizTitle,
+    quizId: quiz.quizId,
   };
 
   switch (question.type) {

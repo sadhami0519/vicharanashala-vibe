@@ -202,7 +202,62 @@ class QuestionService extends BaseService {
     if (!question) {
       throw new NotFoundError(`Question ${questionId} not found`);
     }
-    return toReviewQuestionResponse(question as BaseQuestion);
+    const {quizTitle, quizId} = await this._resolveParentQuiz(questionId);
+    return toReviewQuestionResponse(question as BaseQuestion, {
+      quizTitle,
+      quizId,
+    });
+  }
+
+  /**
+   * Best-effort lookup of the parent quiz for a question. A question can
+   * live in multiple QuestionBanks, each referenced by multiple Quizzes,
+   * so the answer is genuinely ambiguous — we return the first match.
+   *
+   * Returns `{quizTitle: null, quizId: null}` when:
+   *   - the question isn't referenced by any question bank, or
+   *   - no quiz references any of those banks.
+   *
+   * Fail-safe: any thrown error from the underlying repositories is caught
+   * and logged, returning nulls. The review endpoint must never fail just
+   * because metadata resolution broke — the question body is the critical
+   * part of the response.
+   */
+  private async _resolveParentQuiz(
+    questionId: string | ObjectId,
+  ): Promise<{quizTitle: string | null; quizId: string | null}> {
+    try {
+      const banks =
+        await this.questionBankRepository.getQuestionBanksByQuestionId(
+          questionId,
+        );
+      if (!banks?.length) {
+        return {quizTitle: null, quizId: null};
+      }
+      const bankIds = banks
+        .map(b => b._id?.toString())
+        .filter((id): id is string => Boolean(id));
+      if (!bankIds.length) {
+        return {quizTitle: null, quizId: null};
+      }
+      const quizzes = await this.quizRepository.getByIds(bankIds);
+      const first = quizzes?.[0];
+      if (!first) {
+        return {quizTitle: null, quizId: null};
+      }
+      return {
+        quizTitle: (first as any).name ?? (first as any).title ?? null,
+        quizId: first._id?.toString() ?? null,
+      };
+    } catch (err) {
+      // Fail-open: log and return nulls. The review card must still render.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[QuestionService] _resolveParentQuiz failed for ${questionId}:`,
+        err,
+      );
+      return {quizTitle: null, quizId: null};
+    }
   }
 
   public async update(

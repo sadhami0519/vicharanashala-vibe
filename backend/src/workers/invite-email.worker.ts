@@ -28,6 +28,9 @@ import { EnrollmentService } from "#root/modules/users/services/EnrollmentServic
 import { ProgressService } from "#root/modules/users/services/ProgressService.js";
 import { FeedbackRepository } from "#root/modules/quizzes/repositories/providers/mongodb/FeedbackRepository.js";
 import { LedgerRepository } from "#root/modules/hpSystem/repositories/index.js";
+import { SpacedRepetitionService } from "#root/modules/spacedRepetition/services/SpacedRepetitionService.js";
+import { ReviewItemRepository } from "#root/modules/spacedRepetition/repositories/index.js";
+import { SPACED_REPETITION_TYPES } from "#root/modules/spacedRepetition/types.js";
 
 interface WorkerData {
   inviteIds: string[];
@@ -81,7 +84,9 @@ const submissionRepo = new SubmissionRepository(database)
 const userQuizMetricsRepo = new UserQuizMetricsRepository(database)
 const quizRepo = new QuizRepository(database)
 const feedbackRepo = new FeedbackRepository(database)
-const progressService = new ProgressService(progressRepo, submissionRepo, courseRepo, settingsRepo, userRepo, itemRepo, enrollmentRepo, userQuizMetricsRepo, quizRepo, projectSubmissionRepo, feedbackRepo, database)
+const reviewItemRepo = new ReviewItemRepository(database)
+const spacedRepetitionService = new SpacedRepetitionService(database, reviewItemRepo)
+const progressService = new ProgressService(progressRepo, submissionRepo, courseRepo, settingsRepo, userRepo, itemRepo, enrollmentRepo, userQuizMetricsRepo, quizRepo, projectSubmissionRepo, feedbackRepo, database, spacedRepetitionService, questionBankRepo)
 const enrollmentService = new EnrollmentService(enrollmentRepo, courseRepo, userRepo, itemRepo, courseRegistrationRepo, progressService, settingsRepo, inviteRepo, progressRepo, ledgerRepo, database)
 const inviteService = new InviteService(inviteRepo, userRepo, courseRepo, enrollmentRepo, mailService, itemRepo, enrollmentService, database);
 

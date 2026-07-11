@@ -23,6 +23,11 @@ export const startCron = () => {
     autoEjectionEngine.scheduleAutoEjectionCron();
 
     console.log('✅ Auto-ejection engine scheduled successfully');
+
+    // ── Spaced Repetition Notifications ──────────────────────────
+    scheduleReviewNotificationJob();
+
+    console.log('✅ Spaced repetition notification cron scheduled successfully');
   } catch (error) {
     console.error('❌ Failed to initialize delete cron service:', error);
   }

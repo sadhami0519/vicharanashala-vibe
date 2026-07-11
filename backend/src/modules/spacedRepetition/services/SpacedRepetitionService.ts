@@ -133,6 +133,16 @@ class SpacedRepetitionService extends BaseService {
         notification_opt_out: false,
       }));
 
+      // Guard against double-seeding: skip if items already exist for this student+course
+      const existing = await this.reviewItemRepo.findByStudentAndCourse(
+        studentId,
+        courseId,
+        session,
+      );
+      if (existing.length > 0) {
+        return { seeded: 0 };
+      }
+
       const insertedCount = await this.reviewItemRepo.createMany(items, session);
 
       if (insertedCount !== questionIds.length) {

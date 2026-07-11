@@ -58,8 +58,7 @@ import { registerStream, unRegisterStream } from "@/lib/MediaRegistry";
 import { useModuleProgress } from "@/hooks/hooks";
 import { useIsMobile } from "@/hooks/use-mobile";
 import MobileFallbackScreen from "@/components/MobileFallbackScreen";
-import { EmotionSelector, EmotionType } from "@/components/EmotionSelector";
-import { useSubmitEmotion } from "@/hooks/use-emotion";
+
 
 import { runProctoringChecks } from "@/utils/proctoring/proctoringGuard";
 import { EthicsConsentModal } from "./components/policies/EthicsConsentModal";
@@ -144,9 +143,7 @@ export default function CoursePage() {
   const [allProctorsDisabled, setAllProctorsDisabled] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Emotion tracking state
-  const [selectedEmotion, setSelectedEmotion] = useState<{ [key: string]: EmotionType }>({});
-  const { mutateAsync: submitEmotionAsync } = useSubmitEmotion();
+  
 
   const isMobile = useIsMobile();
 
@@ -712,33 +709,7 @@ const [backgroundSectionInfo, setBackgroundSectionInfo] = useState<{
     }
   };
 
-  // Emotion tracking handler
-  const handleEmotionSubmit = async (emotion: EmotionType, feedbackText?: string) => {
-    try {
-      if (!currentItem?._id) return;
-      if (!COURSE_ID || !VERSION_ID) {
-        throw new Error("Course context is not ready yet. Please wait a moment and try again.");
-      }
-
-      const payload = {
-        courseId: COURSE_ID,
-        courseVersionId: VERSION_ID,
-        itemId: currentItem._id,
-        emotion,
-        feedbackText,
-        cohortId: COHORT_ID,
-      };
-
-      await submitEmotionAsync(payload);
-      setSelectedEmotion(prev => ({ ...prev, [currentItem._id]: emotion }));
-      toast.success(
-        feedbackText?.trim() ? "Your emotion and note have been recorded!" : "Your feedback has been recorded!",
-        { position: 'top-right', duration: 2000 }
-      );
-    } catch (error: any) {
-      toast.error(error?.message || "Failed to record emotion", { position: 'top-right' });
-    }
-  };
+  
   const moduleProgressMap = useMemo(() => {
     const map = new Map();
 
@@ -2233,17 +2204,7 @@ return false;
               </header>
               )}
 
-              {/* Emotion Selector Bar */}
-              {currentItem && !focusMode && (
-                <div className="border-b border-border/20 bg-background/50 backdrop-blur-sm px-4 py-2">
-                  <EmotionSelector
-                    itemId={currentItem._id}
-                    onEmotionSelect={handleEmotionSubmit}
-                    disabled={false}
-                    selectedEmotion={selectedEmotion[currentItem._id] || null}
-                  />
-                </div>
-              )}
+              
 
               <div className="flex-1 overflow-hidden relative">
                 {/* Ambient background effect */}

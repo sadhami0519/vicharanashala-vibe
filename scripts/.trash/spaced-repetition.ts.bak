@@ -1,0 +1,147 @@
+// Spaced Repetition hooks — SM-2 spaced repetition for course review
+// Auto-generated from backend SpacedRepetitionController + IReviewItem
+
+import { useMutation, useQuery, useInfiniteQuery } from '@tanstack/react-query';
+import type { AxiosError } from 'axios';
+import { privateAxios } from '../lib/api/client';
+
+// ─── Shared types ──────────────────────────────────────────────────────────
+
+export interface ReviewItemResponse {
+  _id: string;
+  student_id: string;
+  course_id: string;
+  question_id: string;
+  n: number;
+  EF: number;
+  interval_days: number;
+  next_review_at: string;
+  last_reviewed_at: string | null;
+  notification_opt_out: boolean;
+}
+
+export interface CourseRetentionResponse {
+  courseId: string;
+  totalItems: number;
+  overdueCount: number;
+  dueSoonCount: number;
+  averageEF: number;
+  items: ReviewItemResponse[];
+}
+
+// ─── Request bodies ────────────────────────────────────────────────────────
+
+export interface SeedScheduleBody {
+  question_ids: string[];
+  course_id: string;
+  trigger: 'course_completion' | 'manual';
+}
+
+export interface SubmitReviewBody {
+  question_id: string;
+  quality: 0 | 1 | 2 | 3 | 4 | 5;
+}
+
+export interface UpdateOptOutBody {
+  course_id: string;
+  opt_out: boolean;
+}
+
+// ─── API client helpers ────────────────────────────────────────────────────
+
+const srClient = {
+  /** Seed a spaced repetition schedule for a student on a course. */
+  seed: (studentId: string, body: SeedScheduleBody) =>
+    privateAxios.post<number>(`/spaced-repetition/${studentId}/seed`, body),
+
+  /** Submit a review response and get the updated SM-2 state. */
+  review: (studentId: string, body: SubmitReviewBody) =>
+    privateAxios.post<ReviewItemResponse>(`/spaced-repetition/${studentId}/review`, body),
+
+  /** Get all review items across all courses for a student. */
+  getSchedule: (studentId: string) =>
+    privateAxios.get<ReviewItemResponse[]>(`/spaced-repetition/${studentId}/schedule`),
+
+  /** Get retention health and review items for a specific course. */
+  getCourseRetention: (studentId: string, courseId: string) =>
+    privateAxios.get<CourseRetentionResponse>(
+      `/spaced-repetition/${studentId}/course/${courseId}`
+    ),
+
+  /** Bulk-update notification opt-out preference for a course. */
+  updateNotifications: (studentId: string, body: UpdateOptOutBody) =>
+    privateAxios.patch<number>(`/spaced-repetition/${studentId}/notifications`, body),
+};
+
+// ─── Hooks ─────────────────────────────────────────────────────────────────
+
+/**
+ * Seeds spaced repetition items for one or more questions.
+ * Called by the course completion hook with all question IDs from the completed course.
+ */
+export function useSeedSchedule(studentId: string) {
+  return useMutation<
+    number,
+    AxiosError,
+    SeedScheduleBody
+  >({
+    mutationFn: (body) => srClient.seed(studentId, body).then((r) => r.data),
+  });
+}
+
+/**
+ * Submits a student's review quality (0–5 SM-2 scale) for a single question.
+ * Returns the updated ReviewItem with new n, EF, interval_days, and next_review_at.
+ *
+ * Quality scale:
+ *   0 — Complete blackout, wrong answer
+ *   1 — Incorrect; correct answer remembered after seeing it
+ *   2 — Incorrect; correct answer easy to recall after seeing it
+ *   3 — Correct with serious difficulty
+ *   4 — Correct with some hesitation
+ *   5 — Perfect response
+ */
+export function useSubmitReview(studentId: string) {
+  return useMutation<
+    ReviewItemResponse,
+    AxiosError,
+    SubmitReviewBody
+  >({
+    mutationFn: (body) => srClient.review(studentId, body).then((r) => r.data),
+  });
+}
+
+/**
+ * Fetches all ReviewItems for the authenticated student across all completed courses.
+ * Use for the student dashboard "upcoming reviews" view.
+ */
+export function useSpacedRepetitionSchedule(studentId: string) {
+  return useQuery<ReviewItemResponse[], AxiosError>({
+    queryKey: ['spaced-repetition', 'schedule', studentId],
+    queryFn: () => srClient.getSchedule(studentId).then((r) => r.data),
+  });
+}
+
+/**
+ * Fetches retention health for a specific course: overdue/due-soon counts,
+ * average easiness factor, and all ReviewItems for that course.
+ */
+export function useCourseRetention(studentId: string, courseId: string) {
+  return useQuery<CourseRetentionResponse, AxiosError>({
+    queryKey: ['spaced-repetition', 'course', studentId, courseId],
+    queryFn: () => srClient.getCourseRetention(studentId, courseId).then((r) => r.data),
+    enabled: Boolean(studentId) && Boolean(courseId),
+  });
+}
+
+/**
+ * Bulk-updates notification opt-out preference for all review items in a course.
+ * When opted out, the notification cron skips sending reminders for that course.
+ * SM-2 state still updates normally on review — notifications are the only thing toggled.
+ */
+export function useUpdateNotificationPreference(studentId: string) {
+  return useMutation<number, AxiosError, UpdateOptOutBody>({
+    mutationKey: ['spaced-repetition', 'notifications', studentId],
+    mutationFn: (body) => srClient.updateNotifications(studentId, body).then((r) => r.data),
+  });
+}

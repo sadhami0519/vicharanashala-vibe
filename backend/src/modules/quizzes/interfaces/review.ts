@@ -21,6 +21,13 @@ export interface ReviewOption {
  *
  * All five question types (SOL / SML / OTL / NAT / DES) are normalised to this
  * shape so the frontend review card can render them uniformly.
+ *
+ * `quizTitle` and `quizId` are best-effort metadata: a question can live in
+ * multiple QuestionBanks, each referenced by multiple Quizzes. We resolve the
+ * "first" quiz that references a question bank containing this question. The
+ * fields are nullable because (a) the question may be orphaned (no quiz links
+ * to it yet), or (b) a future question type may not belong to any quiz. When
+ * null, the frontend gracefully degrades the attribution line.
  */
 export interface ReviewQuestionResponse {
   id: string;
@@ -29,4 +36,8 @@ export interface ReviewQuestionResponse {
   hint?: string;
   options: ReviewOption[];
   isParameterized: boolean;
+  /** Parent quiz title, or null if no quiz references this question. */
+  quizTitle: string | null;
+  /** Parent quiz id (ObjectId string), or null if no quiz references this question. */
+  quizId: string | null;
 }
