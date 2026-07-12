@@ -421,16 +421,19 @@ recent polish on top. Everything else in this document is complete.
       context (the visible text duplicates this content but the
       `aria-label` ensures consistency if the icon or layout shifts)
   - **Icon `aria-hidden="true"`** — decorative
-  - **Quiz-title attribution: superseded by the 2026-07-08 work above.**
-    The "TODO (logged, not done)" three-options list was a temporary
+  - **Quiz-title attribution: superseded by the 2026-07-08 work above
+    (and re-corrected 2026-07-12 — see "Backend join fix" inside the
+    "Quiz-title attribution on review cards" bullet below).** The
+    "TODO (logged, not done)" three-options list was a temporary
     deferral of backend work; the resolution came on 2026-07-08 when we
-    extended `getForReview` to return `quizTitle`/`quizId` (see the
-    "Quiz-title attribution on review cards" bullet below). The
-    `attributionFor` helper now takes `(item, question)` and renders
-    `From <Course> · <Quiz Title>` when the backend resolves a title,
-    falling back to the original `From <Course> · Question N` otherwise.
-    The deferral annotation is preserved here as a historical breadcrumb
-    so future readers can trace why the backend was later touched.
+    extended `getForReview` to return `quizTitle`/`quizId`, then a code
+    review on 2026-07-12 found the helper was calling the wrong repo
+    method and the join was fixed. The `attributionFor` helper takes
+    `(item, question)` and renders `From <Course> · <Quiz Title>` when
+    the backend resolves a title, falling back to the original
+    `From <Course> · Question N` otherwise. The deferral annotation
+    is preserved here as a historical breadcrumb so future readers can
+    trace why the backend was later touched.
   - **`npx tsc --noEmit` exits clean** (E4 verification 2026-07-04; re-verified
     2026-07-08 after the quiz-title attribution work — 0 errors on the
     spaced-repetition files)
@@ -648,19 +651,34 @@ recent polish on top. Everything else in this document is complete.
     2. `backend/src/modules/quizzes/services/QuestionService.ts` —
        `getForReview` now calls a new private fail-open helper
        `_resolveParentQuiz(questionId)` that walks `getQuestionBanksByQuestionId`
-       → `getByIds(bankIds)` and picks `quizzes[0]`. Helper wraps
-       everything in try/catch + `console.warn` log and returns nulls on
-       failure — review endpoint must never fail on metadata lookup, only
-       on the actual question body.
+       → `QuizRepository.findQuizzesByBankIds(bankIds)` and picks
+       `quizzes[0]`. Helper wraps everything in try/catch + `console.warn`
+       log and returns nulls on failure — review endpoint must never fail
+       on metadata lookup, only on the actual question body.
     3. `backend/src/modules/quizzes/classes/transformers/Question.ts` —
        `toReviewQuestionResponse` accepts an optional second arg
        `{quizTitle, quizId} = {quizTitle: null, quizId: null}`. Fields
        splattered into the shared `base` object so all 5 question-type
        returns pick them up automatically. Default value means future
        callers can omit the arg and still compile.
+  - **Backend join fix (2026-07-12):** the 2026-07-08 helper was calling
+    `quizRepository.getByIds(bankIds)`, which `find`s on the `quizzes`
+    collection by `_id` — i.e. it was looking up QuizItem docs whose `_id`
+    matched a bank id, which never matches in production. As a result the
+    real backend would have returned `quizTitle: null` for every review
+    card and fallen back to the "Question N" copy, even with this feature
+    shipped. Frontend mocks masked the bug. Added a dedicated
+    `QuizRepository.findQuizzesByBankIds(bankIds)` that filters on
+    `details.questionBankRefs.bankId: { $in: bankIds }` (no `allowSkip`
+    filter — the old `findSkipAllowedQuizzes` is reused elsewhere with
+    its business-flag semantics intact). `_resolveParentQuiz` switched to
+    it. `tsc --noEmit` exits 0, archive:
+    `backend/scripts/.trash/tsc-after-quiz-title-backend-fix.txt`.
   - **Verification:** `npx tsc --noEmit` from `backend/` → **exit 0, 0
     errors** (was exit 2 / 5 errors before the transformer was updated).
-    Three archives: `scripts/.trash/tsc-after-quiz-title-backend-{type,service,transform}.txt`.
+    Re-verified 2026-07-12 after the join fix. Three archives:
+    `scripts/.trash/tsc-after-quiz-title-backend-{type,service,transform}.txt`
+    + `scripts/.trash/tsc-after-quiz-title-backend-fix.txt`.
   - **Frontend changes (steps 5–7):** the local `ReviewQuestionResponse`
     interface lives in `ReviewSession.tsx` itself (not the shared types
     file — single-page use). Added `quizTitle: string | null` +
