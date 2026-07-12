@@ -214,6 +214,10 @@ class QuestionService extends BaseService {
    * live in multiple QuestionBanks, each referenced by multiple Quizzes,
    * so the answer is genuinely ambiguous — we return the first match.
    *
+   * Joins Question → QuestionBanks (via `getQuestionBanksByQuestionId`) →
+   * Quizzes (via `findQuizzesByBankIds`, no `allowSkip` filter). Returns
+   * the first quiz's `name` and `_id` stringified.
+   *
    * Returns `{quizTitle: null, quizId: null}` when:
    *   - the question isn't referenced by any question bank, or
    *   - no quiz references any of those banks.
@@ -240,13 +244,13 @@ class QuestionService extends BaseService {
       if (!bankIds.length) {
         return {quizTitle: null, quizId: null};
       }
-      const quizzes = await this.quizRepository.getByIds(bankIds);
+      const quizzes = await this.quizRepository.findQuizzesByBankIds(bankIds);
       const first = quizzes?.[0];
       if (!first) {
         return {quizTitle: null, quizId: null};
       }
       return {
-        quizTitle: (first as any).name ?? (first as any).title ?? null,
+        quizTitle: first.name ?? null,
         quizId: first._id?.toString() ?? null,
       };
     } catch (err) {
