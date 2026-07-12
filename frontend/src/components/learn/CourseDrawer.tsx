@@ -15,7 +15,6 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmotionSelector, type EmotionType } from "@/components/EmotionSelector";
 
 const getItemIcon = (type: string) => {
   switch ((type || "").toLowerCase()) {
@@ -56,12 +55,6 @@ const typeLabel = (type: string) => {
   }
 };
 
-type EmotionConfig = {
-  itemId: string;
-  onEmotionSelect: (emotion: EmotionType, feedbackText?: string) => Promise<void>;
-  selectedEmotion?: EmotionType | null;
-} | null;
-
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -88,8 +81,6 @@ type Props = {
   onToggleSection: (moduleId: string, sectionId: string) => void;
   onSelectItem: (moduleId: string, sectionId: string, itemId: string) => void;
   isItemLocked: (moduleId: string, sectionId: string, itemId: string) => boolean;
-
-  emotion?: EmotionConfig;
 };
 
 // Theme-aware row transition (works in light & dark).
@@ -118,7 +109,6 @@ export function CourseDrawer({
   onToggleSection,
   onSelectItem,
   isItemLocked,
-  emotion,
 }: Props) {
   const supportHref = (() => {
     if (!supportLink) return null;
@@ -190,18 +180,6 @@ export function CourseDrawer({
             </div>
           )}
         </div>
-
-        {/* Emotion check-in for the current item — compact */}
-        {emotion && (
-          <div className="shrink-0 border-b border-border px-3 py-2">
-            <EmotionSelector
-              compact
-              itemId={emotion.itemId}
-              onEmotionSelect={emotion.onEmotionSelect}
-              selectedEmotion={emotion.selectedEmotion ?? null}
-            />
-          </div>
-        )}
 
         {/* Module / section / item tree — scrollable, gets the most room */}
         <ScrollArea className="min-h-0 flex-1">

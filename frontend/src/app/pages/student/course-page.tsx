@@ -36,8 +36,6 @@ import { registerStream, unRegisterStream } from "@/lib/MediaRegistry";
 import { useModuleProgress } from "@/hooks/hooks";
 import { useIsMobile } from "@/hooks/use-mobile";
 import MobileFallbackScreen from "@/components/MobileFallbackScreen";
-import { EmotionSelector, EmotionType } from "@/components/EmotionSelector";
-import { useSubmitEmotion } from "@/hooks/use-emotion";
 
 import { runProctoringChecks } from "@/utils/proctoring/proctoringGuard";
 import { EthicsConsentModal } from "./components/policies/EthicsConsentModal";
@@ -1864,7 +1862,7 @@ return false;
         onClick={() => setAiExpanded(false)}
       >
         {/* Lesson content */}
-        {currentItem ? (
+        {currentItem ?
           currentItem.type === "PROJECT" ? (
             <div className="z-30 absolute inset-0 px-3 sm:px-6 py-16 overflow-y-auto">
               <div className="mx-auto w-full max-w-5xl">
@@ -1921,14 +1919,7 @@ return false;
                 />
               </div>
             </div>
-          </SidebarResizablePanel>
-          {/* // )} */}
-          {/* {isDesktopSidebarVisible &&  */}
-          <ResizableHandle className={`${focusMode ? 'hidden' : 'hidden md:flex'} h-screen`} />
-          {/* } */}
-          <ResizablePanel defaultSize={80} className="min-w-0 min-h-screen">
-            {/* Main Content Area */}
-            <SidebarInset className="flex-1  bg-gradient-to-br from-background via-background to-background/95 peer-data-[variant=inset]:!m-0">
+          ) : null}
               {!focusMode && (
               <header className="flex h-16 shrink-0 items-center gap-2 border-b border-border/20 bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60 px-4">
                 {/* <Button
@@ -1965,6 +1956,18 @@ return false;
               )}
 
               {/* Emotion Selector Bar */}
+              {currentItem && !focusMode && (
+                <div className="border-b border-border/20 bg-background/50 backdrop-blur-sm px-4 py-2">
+                  <EmotionSelector
+                    itemId={currentItem._id}
+                    onEmotionSelect={handleEmotionSubmit}
+                    disabled={false}
+                    selectedEmotion={selectedEmotion[currentItem._id] || null}
+                  />
+                </div>
+              )}
+
+        {/* Emotion Selector Bar */}
               {currentItem && !focusMode && (
                 <div className="border-b border-border/20 bg-background/50 backdrop-blur-sm px-4 py-2">
                   <EmotionSelector
@@ -2083,15 +2086,6 @@ return false;
         onToggleSection={toggleSection}
         onSelectItem={(m, s, i) => { handleSelectItem(m, s, i); setDrawerOpen(false); }}
         isItemLocked={isItemLocked}
-        emotion={
-          currentItem
-            ? {
-                itemId: currentItem._id,
-                onEmotionSelect: handleEmotionSubmit,
-                selectedEmotion: selectedEmotion[currentItem._id] || null,
-              }
-            : null
-        }
       />
 
       {/* AI companion placeholder surfaces (chat / talk / discussion) */}
