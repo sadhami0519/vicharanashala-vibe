@@ -80,3 +80,7 @@ e2e/*.txt
 
 # Local Claude agents
 .github/agents/debugger.agent.md
+
+# Scratch / trash / backup scratch directories (workflow byproducts)
+scripts/.trash/
+frontend/course-page-backup.tsx
