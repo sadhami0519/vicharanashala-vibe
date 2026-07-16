@@ -1,0 +1,942 @@
+'use client';
+
+import { useEffect, useMemo, useReducer, useRef } from 'react';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
+import {
+  Check,
+  HelpCircle,
+  X,
+  Brain,
+  Sparkles,
+  ChevronRight,
+  BookOpen,
+  TrendingUp,
+} from 'lucide-react';
+import { useAuthStore } from '@/store/auth-store';
+import { Link } from '@tanstack/react-router';
+import {
+  useGetSchedule,
+  useGetCourseRetention,
+  useSubmitReview,
+} from '@/hooks/spaced-repetition-hooks';
+import {
+  ReviewItem,
+  RecallQuality,
+} from '@/types/spaced-repetition.types';
+
+// ── Local mock question body — replaces GET /api/quizzes/questions/:id/review
+// while the backend is offline. Mirrors the ReviewQuestionResponse shape:
+// { id, body, type, hint, options[], quizTitle, quizId } per
+// vibe_review_question_endpoint_prompt.md.
+//
+// quizTitle/quizId are best-effort metadata added in 2026-07-08 (quiz-title
+// attribution). Backend's `getForReview` resolves the parent quiz via a
+// Question → QuestionBanks → Quizzes join and returns the FIRST match. When
+// the question isn't referenced by any quiz (orphaned / bank-only), these
+// are null and the attribution line falls back to course + question index.
+
+interface ReviewQuestionResponse {
+  id: string;
+  body: string;
+  type: 'SELECT_ONE_IN_LOT' | 'SELECT_MANY_IN_LOT' | 'NUMERIC_ANSWER';
+  hint?: string;
+  options: string[];
+  quizTitle: string | null;
+  quizId: string | null;
+}
+
+const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
+  'mock-question-1': {
+    id: 'mock-question-1',
+    body: 'What is the capital of France?',
+    type: 'SELECT_ONE_IN_LOT',
+    hint: 'Think of the City of Light.',
+    options: ['London', 'Berlin', 'Paris', 'Madrid'],
+    quizTitle: 'European Capitals',
+    quizId: 'mock-quiz-1',
+  },
+  'mock-question-2': {
+    id: 'mock-question-2',
+    body: 'Which of the following are prime numbers?',
+    type: 'SELECT_MANY_IN_LOT',
+    hint: 'Numbers greater than 1 with exactly two divisors.',
+    options: ['2', '4', '7', '9'],
+    quizTitle: 'Prime Numbers',
+    quizId: 'mock-quiz-1',
+  },
+  'mock-question-3': {
+    id: 'mock-question-3',
+    body: 'What is 12 × 8?',
+    type: 'NUMERIC_ANSWER',
+    options: [],
+    quizTitle: 'Basic Arithmetic',
+    quizId: 'mock-quiz-2',
+  },
+};
+
+async function fetchQuestionForReview(
+  questionId: string,
+): Promise<ReviewQuestionResponse> {
+  // TODO Step 14: replace with `api('/api/quizzes/questions/${questionId}/review')`
+  // once the backend is wired through openapi-fetch gen-schema.
+  await new Promise(r => setTimeout(r, 200));
+  const q = MOCK_QUESTIONS[questionId];
+  if (!q) throw new Error(`No mock question for ${questionId}`);
+  return q;
+}
+
+// ── Session state machine ────────────────────────────────────────────────
+
+type Phase =
+  | 'loading-schedule'
+  | 'loading-question'
+  | 'awaiting-response'
+  | 'showing-feedback'
+  | 'session-complete'
+  | 'empty';
+
+interface SessionState {
+  phase: Phase;
+  dueQueue: ReviewItem[];
+  currentIndex: number;
+  currentQuestion: ReviewQuestionResponse | null;
+  lastResponse: { quality: RecallQuality; nextReviewAt: string } | null;
+  answeredCount: number;
+  qualityCounts: Record<RecallQuality, number>;
+}
+
+type Action =
+  | { type: 'schedule-loaded'; items: ReviewItem[] }
+  | { type: 'question-loaded'; question: ReviewQuestionResponse }
+  | { type: 'question-load-failed' }
+  | { type: 'submit'; quality: RecallQuality; nextReviewAt: string }
+  | { type: 'advance' }
+  | { type: 'restart'; items: ReviewItem[] }
+  | { type: 'no-due' };
+
+const SESSION_CAP = 10;
+
+const PHASE_LABELS: Record<Phase, string> = {
+  'loading-schedule': 'Loading your review queue…',
+  'loading-question': 'Loading question…',
+  'awaiting-response': 'How well did you remember?',
+  'showing-feedback': 'Nice work!',
+  'session-complete': "That's all for today!",
+  empty: 'No reviews due right now.',
+};
+
+function reducer(state: SessionState, action: Action): SessionState {
+  switch (action.type) {
+    case 'schedule-loaded':
+      if (action.items.length === 0) {
+        return { ...state, phase: 'empty' };
+      }
+      return {
+        ...state,
+        dueQueue: action.items.slice(0, SESSION_CAP),
+        phase: 'loading-question',
+      };
+    case 'question-loaded':
+      return {
+        ...state,
+        currentQuestion: action.question,
+        phase: 'awaiting-response',
+      };
+    case 'question-load-failed':
+      return { ...state, phase: 'showing-feedback' };
+    case 'submit':
+      return {
+        ...state,
+        lastResponse: {
+          quality: action.quality,
+          nextReviewAt: action.nextReviewAt,
+        },
+        answeredCount: state.answeredCount + 1,
+        qualityCounts: {
+          ...state.qualityCounts,
+          [action.quality]: state.qualityCounts[action.quality] + 1,
+        },
+        phase: 'showing-feedback',
+      };
+    case 'advance': {
+      const next = state.currentIndex + 1;
+      if (next >= state.dueQueue.length) {
+        return { ...state, phase: 'session-complete' };
+      }
+      return {
+        ...state,
+        currentIndex: next,
+        currentQuestion: null,
+        lastResponse: null,
+        phase: 'loading-question',
+      };
+    }
+    case 'restart':
+      return {
+        phase: action.items.length === 0 ? 'empty' : 'loading-question',
+        dueQueue: action.items.slice(0, SESSION_CAP),
+        currentIndex: 0,
+        currentQuestion: null,
+        lastResponse: null,
+        answeredCount: 0,
+        qualityCounts: { got_it: 0, unsure: 0, missed: 0 },
+      };
+    case 'no-due':
+      return { ...state, phase: 'empty' };
+    default:
+      return state;
+  }
+}
+
+const initialState: SessionState = {
+  phase: 'loading-schedule',
+  dueQueue: [],
+  currentIndex: 0,
+  currentQuestion: null,
+  lastResponse: null,
+  answeredCount: 0,
+  qualityCounts: { got_it: 0, unsure: 0, missed: 0 },
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+function dayDelta(nextReviewAt: string): number {
+  const ms = new Date(nextReviewAt).getTime() - Date.now();
+  return Math.max(0, Math.round(ms / (1000 * 60 * 60 * 24)));
+}
+
+/**
+ * Map a raw EF (typically 1.3–3.0) to a 0–100 retention health %.
+ * Mirrors `efToRetentionPercent` in RetentionDashboard.tsx so the two
+ * pages read identically. EF 1.3 → 0, EF 3.0 → 100, clamped.
+ */
+function efToRetentionPercent(ef: number): number {
+  const clamped = Math.max(1.3, Math.min(3.0, ef));
+  return Math.round(((clamped - 1.3) / (3.0 - 1.3)) * 100);
+}
+
+function retentionBand(percent: number): {
+  label: string;
+  chipClass: string;
+} {
+  if (percent >= 75) {
+    return { label: 'Strong', chipClass: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
+  }
+  if (percent >= 50) {
+    return { label: 'Steady', chipClass: 'bg-amber-100 text-amber-700 border-amber-200' };
+  }
+  return { label: 'Needs work', chipClass: 'bg-rose-100 text-rose-700 border-rose-200' };
+}
+
+/**
+ * Pick the dominant course from this session's due queue — i.e. the
+ * course_id that appears most often. Single-course sessions return that
+ * course; multi-course sessions return the leader with a note.
+ */
+function dominantCourse(items: ReviewItem[]): {
+  courseId: string;
+  uniqueCount: number;
+} | null {
+  if (items.length === 0) return null;
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    counts.set(item.course_id, (counts.get(item.course_id) ?? 0) + 1);
+  }
+  let leaderId = items[0].course_id;
+  let leaderCount = 0;
+  for (const [courseId, count] of counts) {
+    if (count > leaderCount) {
+      leaderId = courseId;
+      leaderCount = count;
+    }
+  }
+  return { courseId: leaderId, uniqueCount: counts.size };
+}
+
+// Friendly course name lookup. Mirrors the dashboard's COURSE_LABELS for the
+// mock layer; production will resolve via course-catalog hook.
+const COURSE_LABELS: Record<string, string> = {
+  'mock-course-1': 'Algebra Foundations',
+  'mock-course-2': 'World History 101',
+};
+
+function courseLabel(courseId: string): string {
+  return COURSE_LABELS[courseId] ?? courseId;
+}
+
+// Format raw question IDs for human display. Mock IDs follow the
+// `mock-question-N` pattern; unknowns are returned as-is.
+function formatQuestionLabel(qid: string): string {
+  const match = /^mock-question-(\d+)$/.exec(qid);
+  if (match) return `Question ${match[1]}`;
+  return qid;
+}
+
+// Build the attribution line shown above the question body. Composes:
+//   1. Course name (always; required for context)
+//   2. Parent quiz title (when backend resolved one — 2026-07-08 backend
+//      change to `getForReview` adds `quizTitle`/`quizId` to the response.
+//      Resolved via Question → QuestionBanks → Quizzes join; "first quiz"
+//      when ambiguous.)
+//   3. Question index (only when no quiz title is available — the title
+//      is more informative than "Question 3", so we drop the index to
+//      avoid line noise.)
+function attributionFor(
+  item: ReviewItem,
+  question: ReviewQuestionResponse | null,
+): string {
+  const course = courseLabel(item.course_id);
+  const quizTitle = question?.quizTitle;
+  if (quizTitle) {
+    return `From ${course} · ${quizTitle}`;
+  }
+  return `From ${course} · ${formatQuestionLabel(item.question_id)}`;
+}
+
+const QUALITY_META: Record<
+  RecallQuality,
+  { label: string; icon: typeof Check; chipClass: string; description: string }
+> = {
+  got_it: {
+    label: 'Got it',
+    icon: Check,
+    chipClass: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    description: 'Confident and fast — interval compounds.',
+  },
+  unsure: {
+    label: 'Unsure',
+    icon: HelpCircle,
+    chipClass: 'bg-amber-100 text-amber-700 border-amber-200',
+    description: 'Recalled with effort — short bump.',
+  },
+  missed: {
+    label: 'Missed it',
+    icon: X,
+    chipClass: 'bg-rose-100 text-rose-700 border-rose-200',
+    description: "Interval resets — you'll see this tomorrow.",
+  },
+};
+
+// ── Component ────────────────────────────────────────────────────────────
+
+export default function ReviewSession() {
+  const { user } = useAuthStore();
+  const studentId = user?.uid ?? '';
+
+  const {
+    data: schedule,
+    isLoading: isScheduleLoading,
+    refetch: refetchSchedule,
+  } = useGetSchedule(studentId);
+
+  const submitReview = useSubmitReview(studentId);
+
+  const [state, dispatch] = useReducer(reducer, initialState);
+
+  // Resolve due items (those whose next_review_at is now or earlier).
+  const dueItems = useMemo(() => {
+    if (!schedule) return [];
+    const now = Date.now();
+    return schedule.filter(
+      item =>
+        !item.notification_opt_out &&
+        new Date(item.next_review_at).getTime() <= now,
+    );
+  }, [schedule]);
+
+  const totalDueCount = dueItems.length;
+
+  // Dominant course for the summary screen. We compute it from the queue
+  // captured at session start (state.dueQueue) so the leader is stable
+  // even if the schedule refetches mid-session.
+  const sessionSummary = useMemo(() => {
+    if (state.dueQueue.length === 0) return null;
+    return dominantCourse(state.dueQueue);
+  }, [state.dueQueue]);
+
+  // Fetch fresh retention for the dominant course once the session is
+  // complete — by that point `useSubmitReview` has invalidated the
+  // schedule cache, so averageEF reflects post-SM-2 values.
+  const retentionQuery = useGetCourseRetention(
+    studentId,
+    sessionSummary?.courseId ?? '',
+  );
+
+  // 1. Boot: load schedule.
+  useEffect(() => {
+    if (!user) return;
+    if (isScheduleLoading) return;
+    if (state.phase !== 'loading-schedule') return;
+    dispatch({ type: 'schedule-loaded', items: dueItems });
+  }, [user, isScheduleLoading, dueItems, state.phase]);
+
+  // 2. When entering a new card, fetch the question body.
+  useEffect(() => {
+    if (state.phase !== 'loading-question') return;
+    const item = state.dueQueue[state.currentIndex];
+    if (!item) {
+      dispatch({ type: 'no-due' });
+      return;
+    }
+    let cancelled = false;
+    fetchQuestionForReview(item.question_id)
+      .then(question => {
+        if (cancelled) return;
+        dispatch({ type: 'question-loaded', question });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        toast.error(`Couldn't load question: ${err.message}`);
+        dispatch({ type: 'question-load-failed' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.phase, state.dueQueue, state.currentIndex]);
+
+  function handleResponse(quality: RecallQuality) {
+    const item = state.dueQueue[state.currentIndex];
+    if (!item) return;
+    submitReview.mutate(
+      { questionId: item.question_id, quality },
+      {
+        onSuccess: updated => {
+          dispatch({
+            type: 'submit',
+            quality,
+            nextReviewAt: updated.next_review_at,
+          });
+        },
+        onError: err => {
+          toast.error(
+            err instanceof Error
+              ? `Couldn't save your response: ${err.message}`
+              : "Couldn't save your response.",
+          );
+        },
+      },
+    );
+  }
+
+  function handleAdvance() {
+    dispatch({ type: 'advance' });
+  }
+
+  function handleRestart() {
+    refetchSchedule();
+    dispatch({ type: 'restart', items: dueItems });
+  }
+
+  // ── Keyboard shortcuts ──────────────────────────────────────────────
+  // 1 / 2 / 3 → rate card. Space / Enter / ArrowRight → advance. Disabled
+  // when focus is in a text input so future text fields don't break.
+
+  const gotItRef = useRef<HTMLButtonElement | null>(null);
+  const nextRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    function isTyping(): boolean {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      return (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        (el as HTMLElement).isContentEditable
+      );
+    }
+
+    function onKey(e: KeyboardEvent): void {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTyping()) return;
+      const k = e.key;
+      // Rate (1/2/3 map to quality)
+      if (k === '1' || k === '2' || k === '3') {
+        if (state.phase !== 'awaiting-response') return;
+        if (submitReview.isPending) return;
+        e.preventDefault();
+        handleResponse(
+          k === '1' ? 'got_it' : k === '2' ? 'unsure' : 'missed',
+        );
+        return;
+      }
+      // Advance (Space/Enter/ArrowRight). Don't double-fire on Space when
+      // the Next button itself has focus — the browser will handle it via
+      // the button's native onClick.
+      if (k === ' ' || k === 'Enter' || k === 'ArrowRight') {
+        if (state.phase !== 'showing-feedback') return;
+        if (state.currentIndex + 1 > state.dueQueue.length) return; // redundant guard
+        // Skip if a button is focused (let the native button handle it)
+        if (
+          document.activeElement &&
+          (document.activeElement as HTMLElement).tagName === 'BUTTON'
+        )
+          return;
+        e.preventDefault();
+        handleAdvance();
+      }
+    }
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // handleResponse and handleAdvance close over current state/props — they
+    // capture the latest values each time `state` changes (the effect
+    // re-registers). submitReview.isPending is read directly so mutates
+    // during the same tick will not double-fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.phase, state.currentIndex, state.dueQueue.length]);
+
+  // ── Focus management ────────────────────────────────────────────────
+
+  useEffect(() => {
+    // When a new card lands and we're ready for a response, drop focus on
+    // the rating button so keyboard users can hit 1/2/3 immediately.
+    if (state.phase === 'awaiting-response') {
+      gotItRef.current?.focus();
+    } else if (state.phase === 'showing-feedback') {
+      nextRef.current?.focus();
+    } else if (state.phase === 'session-complete') {
+      // No-op — Refresh button is the only call to action and may not be
+      // needed for the user's flow. Leaving focus where it is.
+    }
+  }, [state.phase]);
+
+  // ── Render guards ────────────────────────────────────────────────────
+
+  if (!user) {
+    return (
+      <Card className="max-w-xl mx-auto mt-8">
+        <CardHeader>
+          <CardTitle>Review session</CardTitle>
+          <CardDescription>Sign in to start a review session.</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (state.phase === 'loading-schedule') {
+    return (
+      <Card className="max-w-xl mx-auto mt-8">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="h-5 w-5" /> Review session
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Skeleton className="h-4 w-3/4" />
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // ── Empty state ──────────────────────────────────────────────────────
+
+  if (state.phase === 'empty') {
+    // Race guard: the schedule query drives both the reducer's transition
+    // to `empty` and the total schedule length we use here. If the query
+    // hasn't settled yet, render a skeleton rather than flashing the wrong
+    // empty state (e.g. "all caught up" at a brand-new student).
+    if (isScheduleLoading) {
+      return (
+        <div className="max-w-xl mx-auto mt-8">
+          <Skeleton className="h-40 w-full" />
+        </div>
+      );
+    }
+
+    const hasNoScheduleAtAll = !schedule || schedule.length === 0;
+
+    if (hasNoScheduleAtAll) {
+      // Brand-new student: mirror the dashboard's empty state so the two
+      // pages render consistently. Same Card styling, icon, copy, and CTA.
+      return (
+        <Card className="max-w-xl mx-auto mt-8 border-2 border-dashed border-muted/60 bg-gradient-to-br from-muted/30 via-background to-background">
+          <CardContent className="flex flex-col items-center gap-4 py-12 px-6 text-center">
+            <div className="rounded-full bg-primary/10 p-4 ring-1 ring-primary/20">
+              <BookOpen className="h-8 w-8 text-primary" aria-hidden="true" />
+            </div>
+            <div className="space-y-1.5 max-w-sm">
+              <h3 className="text-base font-semibold tracking-tight">
+                No review schedules yet
+              </h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Complete a quiz in any course and we'll automatically seed a
+                spaced-repetition schedule for the questions you attempted.
+              </p>
+            </div>
+            <Button asChild variant="outline" size="sm" className="mt-1">
+              <Link
+                to="/student/courses"
+                aria-label="Browse courses to start learning"
+              >
+                Browse courses
+                <ChevronRight className="ml-1 h-3.5 w-3.5" aria-hidden="true" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    // Existing student with a schedule but nothing currently due.
+    return (
+      <Card className="max-w-xl mx-auto mt-8 border-emerald-200/60 bg-emerald-50/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-emerald-600" />
+            You're all caught up
+          </CardTitle>
+          <CardDescription>
+            No reviews due right now. We'll ping you when the next one unlocks.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  // ── Session complete ─────────────────────────────────────────────────
+
+  if (state.phase === 'session-complete') {
+    const moreRemaining = Math.max(0, totalDueCount - state.answeredCount);
+    const gotItCount = state.qualityCounts.got_it;
+    const unsureCount = state.qualityCounts.unsure;
+    const missedCount = state.qualityCounts.missed;
+
+    // Retention readout for the dominant course (only when the course
+    // retention summary is available — `averageEF` is undefined while the
+    // mock-first API is warming up).
+    const retentionPercent =
+      retentionQuery.data && typeof retentionQuery.data.averageEF === 'number'
+        ? efToRetentionPercent(retentionQuery.data.averageEF)
+        : null;
+    const retentionBandInfo =
+      retentionPercent == null ? null : retentionBand(retentionPercent);
+
+    const multiCourseNote =
+      sessionSummary && sessionSummary.uniqueCount > 1
+        ? `Top of ${sessionSummary.uniqueCount} courses this session`
+        : null;
+
+    return (
+      <Card className="max-w-xl mx-auto mt-8">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-emerald-600" /> Session complete
+          </CardTitle>
+          <CardDescription>
+            You reviewed {state.answeredCount} card
+            {state.answeredCount === 1 ? '' : 's'} today.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {/* Headline score */}
+          <div className="text-center">
+            <div className="text-5xl font-extrabold tracking-tight">
+              {gotItCount}
+              <span className="text-2xl text-muted-foreground font-semibold">
+                {' / '}{state.answeredCount}
+              </span>
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">
+              remembered confidently
+            </p>
+          </div>
+
+          {/* Quality breakdown */}
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
+              <div className="text-lg font-bold text-emerald-700">
+                {gotItCount}
+              </div>
+              <div className="text-[11px] uppercase tracking-wide text-emerald-700/80">
+                Got it
+              </div>
+            </div>
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-2">
+              <div className="text-lg font-bold text-amber-700">
+                {unsureCount}
+              </div>
+              <div className="text-[11px] uppercase tracking-wide text-amber-700/80">
+                Unsure
+              </div>
+            </div>
+            <div className="rounded-md border border-rose-200 bg-rose-50 p-2">
+              <div className="text-lg font-bold text-rose-700">
+                {missedCount}
+              </div>
+              <div className="text-[11px] uppercase tracking-wide text-rose-700/80">
+                Missed
+              </div>
+            </div>
+          </div>
+
+          {/* Retention readout (per dominant course) */}
+          {retentionPercent != null && sessionSummary && (
+            <div className="rounded-md border p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <TrendingUp
+                    className="h-4 w-4 text-primary"
+                    aria-hidden="true"
+                  />
+                  Retention on {courseLabel(sessionSummary.courseId)}
+                </div>
+                {retentionBandInfo && (
+                  <Badge
+                    variant="outline"
+                    className={retentionBandInfo.chipClass}
+                  >
+                    {retentionBandInfo.label}
+                  </Badge>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Your retention on this course is now{' '}
+                <strong className="text-foreground">{retentionPercent}%</strong>.
+              </p>
+              <Progress
+                value={retentionPercent}
+                className="h-2"
+                aria-label={`Retention health ${retentionPercent} percent`}
+              />
+              {multiCourseNote && (
+                <p className="text-[11px] text-muted-foreground">
+                  {multiCourseNote}
+                </p>
+              )}
+            </div>
+          )}
+
+          {moreRemaining > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              <strong>{moreRemaining}</strong> more waiting for you tomorrow.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Nothing else waiting — see you at the next unlock.
+            </p>
+          )}
+          <Button onClick={handleRestart} variant="outline" className="w-full">
+            Refresh schedule
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // ── Active card phase ────────────────────────────────────────────────
+
+  const item = state.dueQueue[state.currentIndex];
+  const question = state.currentQuestion;
+  const progress =
+    state.dueQueue.length === 0
+      ? 0
+      : ((state.currentIndex + 1) / state.dueQueue.length) * 100;
+
+  return (
+    <div className="max-w-2xl mx-auto mt-6 space-y-4">
+      {/* Progress header */}
+      <Card>
+        <CardContent className="py-4 space-y-2">
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <span className="flex items-center gap-2">
+              <Brain className="h-4 w-4" />
+              Card {state.currentIndex + 1} of {state.dueQueue.length}
+            </span>
+            <span>
+              {totalDueCount > state.dueQueue.length
+                ? `${totalDueCount - state.dueQueue.length} more tomorrow`
+                : 'Last card in queue'}
+            </span>
+          </div>
+          <Progress value={progress} className="h-2" />
+        </CardContent>
+      </Card>
+
+      {/* Question card */}
+      <Card className="min-h-[280px]">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <Badge variant="secondary" className="uppercase tracking-wide">
+              {question?.type.replace(/_/g, ' ') ?? '…'}
+            </Badge>
+            {item && (
+              <span
+                className="text-xs text-muted-foreground inline-flex items-center gap-1"
+                aria-label={`Question origin: ${attributionFor(item, question)}`}
+              >
+                <BookOpen className="h-3 w-3" aria-hidden="true" />
+                {attributionFor(item, question)}
+              </span>
+            )}
+          </div>
+          {state.phase === 'loading-question' || !question ? (
+            <div className="space-y-3 pt-2">
+              <Skeleton className="h-6 w-5/6" />
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : (
+            <CardTitle className="text-lg leading-relaxed pt-2">
+              {question.body}
+            </CardTitle>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {question && question.options.length > 0 && (
+            <ul className="space-y-2">
+              {question.options.map((opt, idx) => {
+                const letter = String.fromCharCode(65 + idx); // A, B, C, D
+                return (
+                  <li
+                    key={`${question.id}-${idx}`}
+                    className="flex items-start gap-3 rounded-lg border border-border p-3 bg-muted/30"
+                  >
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background border text-xs font-semibold">
+                      {letter}
+                    </span>
+                    <span className="text-sm">{opt}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {question && question.type === 'NUMERIC_ANSWER' && (
+            <p className="text-sm text-muted-foreground italic">
+              (Numeric answer — recall it and rate yourself below.)
+            </p>
+          )}
+
+          {state.phase === 'showing-feedback' && state.lastResponse && (
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className={`mt-4 rounded-md border p-3 ${
+                QUALITY_META[state.lastResponse.quality].chipClass
+              }`}
+            >
+              <div className="text-sm font-medium">
+                Next review in {dayDelta(state.lastResponse.nextReviewAt)} day
+                {dayDelta(state.lastResponse.nextReviewAt) === 1 ? '' : 's'}.
+              </div>
+              <div className="text-xs opacity-80 mt-1">
+                {QUALITY_META[state.lastResponse.quality].description}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Action area */}
+      <Card>
+        <CardContent className="py-4">
+          {state.phase === 'awaiting-response' && (
+            <div>
+              <p
+                id="rating-prompt"
+                className="text-sm font-medium text-muted-foreground mb-3"
+              >
+                {PHASE_LABELS['awaiting-response']}
+              </p>
+              <div
+                className="grid grid-cols-3 gap-2"
+                role="group"
+                aria-labelledby="rating-prompt"
+              >
+                <Button
+                  ref={gotItRef}
+                  variant="outline"
+                  aria-label="Rate as Got it (press 1)"
+                  aria-keyshortcuts="1"
+                  className="flex-col gap-1 h-auto py-3 border-emerald-300 text-emerald-700 hover:bg-emerald-50 focus-visible:ring-emerald-500"
+                  onClick={() => handleResponse('got_it')}
+                  disabled={submitReview.isPending}
+                >
+                  <Check className="h-5 w-5" aria-hidden="true" />
+                  <span className="font-semibold">Got it</span>
+                  <span className="text-[10px] opacity-60 font-normal">1</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  aria-label="Rate as Unsure (press 2)"
+                  aria-keyshortcuts="2"
+                  className="flex-col gap-1 h-auto py-3 border-amber-300 text-amber-700 hover:bg-amber-50 focus-visible:ring-amber-500"
+                  onClick={() => handleResponse('unsure')}
+                  disabled={submitReview.isPending}
+                >
+                  <HelpCircle className="h-5 w-5" aria-hidden="true" />
+                  <span className="font-semibold">Unsure</span>
+                  <span className="text-[10px] opacity-60 font-normal">2</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  aria-label="Rate as Missed it (press 3)"
+                  aria-keyshortcuts="3"
+                  className="flex-col gap-1 h-auto py-3 border-rose-300 text-rose-700 hover:bg-rose-50 focus-visible:ring-rose-500"
+                  onClick={() => handleResponse('missed')}
+                  disabled={submitReview.isPending}
+                >
+                  <X className="h-5 w-5" aria-hidden="true" />
+                  <span className="font-semibold">Missed</span>
+                  <span className="text-[10px] opacity-60 font-normal">3</span>
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground text-center mt-3">
+                Keyboard: <kbd className="px-1 border rounded">1</kbd>{' '}
+                <kbd className="px-1 border rounded">2</kbd>{' '}
+                <kbd className="px-1 border rounded">3</kbd> to rate.
+                <span className="sr-only">
+                  {' '}Press 1 for Got it, 2 for Unsure, 3 for Missed it.
+                </span>
+              </p>
+            </div>
+          )}
+
+          {state.phase === 'showing-feedback' && (
+            <Button
+              ref={nextRef}
+              onClick={handleAdvance}
+              className="w-full"
+              size="lg"
+              aria-label={
+                state.currentIndex + 1 >= state.dueQueue.length
+                  ? 'Finish session (press Enter)'
+                  : 'Next card (press Enter)'
+              }
+              aria-keyshortcuts="Enter Space ArrowRight"
+            >
+              {state.currentIndex + 1 >= state.dueQueue.length
+                ? 'Finish session'
+                : 'Next card'}
+              <ChevronRight className="ml-2 h-4 w-4" aria-hidden="true" />
+            </Button>
+          )}
+
+          {state.phase === 'loading-question' && (
+            <p className="text-sm text-muted-foreground text-center">
+              {PHASE_LABELS['loading-question']}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
