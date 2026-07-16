@@ -9,8 +9,9 @@ import {UserQuizMetricsRepository} from '../repositories/providers/mongodb/UserQ
 import {MongoDatabase} from '#root/shared/database/providers/mongo/MongoDatabase.js';
 import {GLOBAL_TYPES} from '#root/types.js';
 import {ParameterMap} from '../question-processing/tag-parser/tags/Tag.js';
-import {BaseQuestion} from '../classes/transformers/Question.js';
+import {BaseQuestion, toReviewQuestionResponse} from '../classes/transformers/Question.js';
 import {IQuestionRenderView} from '../question-processing/renderers/interfaces/RenderViews.js';
+import {ReviewQuestionResponse} from '../interfaces/review.js';
 import {QuestionProcessor} from '../question-processing/QuestionProcessor.js';
 import {QuizRepository} from '../repositories/providers/mongodb/QuizRepository.js';
 import {ClientSession, ObjectId} from 'mongodb';
@@ -188,6 +189,79 @@ class QuestionService extends BaseService {
         attemptedByUsersCount,
       };
     });
+  }
+
+  /**
+   * Returns a student-facing question for the spaced-repetition review screen.
+   * Read-only — no transaction needed. Answer(s) are stripped.
+   */
+  public async getForReview(
+    questionId: string | ObjectId,
+  ): Promise<ReviewQuestionResponse> {
+    const question = await this.questionRepository.getById(questionId, undefined);
+    if (!question) {
+      throw new NotFoundError(`Question ${questionId} not found`);
+    }
+    const {quizTitle, quizId} = await this._resolveParentQuiz(questionId);
+    return toReviewQuestionResponse(question as BaseQuestion, {
+      quizTitle,
+      quizId,
+    });
+  }
+
+  /**
+   * Best-effort lookup of the parent quiz for a question. A question can
+   * live in multiple QuestionBanks, each referenced by multiple Quizzes,
+   * so the answer is genuinely ambiguous — we return the first match.
+   *
+   * Joins Question → QuestionBanks (via `getQuestionBanksByQuestionId`) →
+   * Quizzes (via `findQuizzesByBankIds`, no `allowSkip` filter). Returns
+   * the first quiz's `name` and `_id` stringified.
+   *
+   * Returns `{quizTitle: null, quizId: null}` when:
+   *   - the question isn't referenced by any question bank, or
+   *   - no quiz references any of those banks.
+   *
+   * Fail-safe: any thrown error from the underlying repositories is caught
+   * and logged, returning nulls. The review endpoint must never fail just
+   * because metadata resolution broke — the question body is the critical
+   * part of the response.
+   */
+  private async _resolveParentQuiz(
+    questionId: string | ObjectId,
+  ): Promise<{quizTitle: string | null; quizId: string | null}> {
+    try {
+      const banks =
+        await this.questionBankRepository.getQuestionBanksByQuestionId(
+          questionId,
+        );
+      if (!banks?.length) {
+        return {quizTitle: null, quizId: null};
+      }
+      const bankIds = banks
+        .map(b => b._id?.toString())
+        .filter((id): id is string => Boolean(id));
+      if (!bankIds.length) {
+        return {quizTitle: null, quizId: null};
+      }
+      const quizzes = await this.quizRepository.findQuizzesByBankIds(bankIds);
+      const first = quizzes?.[0];
+      if (!first) {
+        return {quizTitle: null, quizId: null};
+      }
+      return {
+        quizTitle: first.name ?? null,
+        quizId: first._id?.toString() ?? null,
+      };
+    } catch (err) {
+      // Fail-open: log and return nulls. The review card must still render.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[QuestionService] _resolveParentQuiz failed for ${questionId}:`,
+        err,
+      );
+      return {quizTitle: null, quizId: null};
+    }
   }
 
   public async update(

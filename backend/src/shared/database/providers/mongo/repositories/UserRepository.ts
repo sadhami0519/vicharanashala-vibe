@@ -12,13 +12,20 @@ import {appConfig} from '#root/config/app.js';
 
 if (!admin.apps.length) {
   if (appConfig.isDevelopment) {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        clientEmail: appConfig.firebase.clientEmail,
-        privateKey: appConfig.firebase.privateKey.replace(/\\n/g, '\n'),
-        projectId: appConfig.firebase.projectId,
-      }),
-    });
+    const privateKey = appConfig.firebase.privateKey ?? '';
+    if (privateKey && !privateKey.includes('FAKE_FOR_LOCAL_DEV')) {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          clientEmail: appConfig.firebase.clientEmail,
+          privateKey: privateKey.replace(/\\n/g, '\n'),
+          projectId: appConfig.firebase.projectId,
+        }),
+      });
+    } else {
+      console.warn(
+        '[Firebase] Skipping init — no real credentials detected in development.',
+      );
+    }
   } else {
     admin.initializeApp({
       credential: admin.credential.applicationDefault(),

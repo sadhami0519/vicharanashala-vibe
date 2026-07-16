@@ -29,6 +29,7 @@ export const appConfig = {
   // Default ON: the slot-booking fulfillment evaluator (Phase 3) annotates ended
   // windows as FULFILLED/UNFULFILLED. Set ENABLE_FULFILLMENT_JOB='false' to stop.
   ENABLE_FULFILLMENT_JOB: env('ENABLE_FULFILLMENT_JOB') !== 'false',
+  ENABLE_SPACED_REPETITION_JOB: env('ENABLE_SPACED_REPETITION_JOB') === 'true',
   GOOGLE_APPLICATION_CREDENTIALS: env('GOOGLE_APPLICATION_CREDENTIALS'),
   GCP_BACKUP_BUCKET: env('GCP_BACKUP_BUCKET'),
   GCP_BACKUP_ACTIVITY_BUCKET: env('GCP_BACKUP_ACTIVITY_BUCKET'),

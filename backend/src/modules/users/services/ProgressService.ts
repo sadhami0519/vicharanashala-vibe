@@ -48,6 +48,10 @@ import { SETTING_TYPES } from '#root/modules/setting/types.js';
 import { CourseSettingService } from '#root/modules/setting/index.js';
 import { getContainer } from '#root/bootstrap/loadModules.js';
 import { NOTIFICATIONS_TYPES } from '#root/modules/notifications/types.js';
+import { SPACED_REPETITION_TYPES } from '#spacedRepetition/types.js';
+import type { SpacedRepetitionService } from '#spacedRepetition/services/SpacedRepetitionService.js';
+import type { QuestionBankRepository } from '#quizzes/repositories/providers/mongodb/QuestionBankRepository.js';
+import { IQuizDetails } from '#root/shared/interfaces/models.js';
 import type { InviteService } from '#root/modules/notifications/services/InviteService.js';
 import type { InviteRepository } from '#shared/database/providers/mongo/repositories/InviteRepository.js';
 
@@ -115,6 +119,12 @@ class ProgressService extends BaseService {
 
     @inject(GLOBAL_TYPES.Database)
     private readonly database: MongoDatabase, // inject the database provider
+
+    @inject(SPACED_REPETITION_TYPES.SpacedRepetitionService)
+    private readonly spacedRepetitionService: SpacedRepetitionService,
+
+    @inject(QUIZZES_TYPES.QuestionBankRepo)
+    private readonly questionBankRepo: QuestionBankRepository,
   ) {
     super(database);
   }
@@ -2652,6 +2662,12 @@ class ProgressService extends BaseService {
     if (justCompleted || crossedFollowUpThreshold) {
       await this.triggerFollowUpInvite(userId, courseId, courseVersionId);
     }
+
+    // Seed spaced repetition schedule once the student completes the course.
+    // Best-effort — seeding failure must never affect completion.
+    if (justCompleted) {
+      await this.triggerSpacedRepetitionSeed(userId, courseId, courseVersionId);
+    }
   }
 
   /**
@@ -2707,6 +2723,72 @@ class ProgressService extends BaseService {
         error,
       );
     }
+  }
+
+  /**
+   * Seed the spaced repetition review schedule for a student who just
+   * completed a course. Collects all quiz questions from every QUIZ item in
+   * the course version, then calls seedSchedule().
+   *
+   * Best-effort — must never break course completion.
+   */
+  private async triggerSpacedRepetitionSeed(
+    userId: string,
+    courseId: string,
+    courseVersionId: string,
+  ): Promise<void> {
+    try {
+      const questionIds = await this.getQuizQuestionIds(courseVersionId);
+      if (!questionIds.length) {
+        return;
+      }
+      await this.spacedRepetitionService.seedSchedule(userId, courseId, questionIds);
+    } catch (error) {
+      console.error(
+        `[SpacedRepetition] Failed to seed schedule for user ${userId} after completing course ${courseId}/${courseVersionId}:`,
+        error,
+      );
+    }
+  }
+
+  /**
+   * Collect all unique question IDs from every QUIZ-type item in a course
+   * version, by resolving questionBankRefs to their parent QuestionBank
+   * documents and extracting the question IDs stored there.
+   */
+  private async getQuizQuestionIds(courseVersionId: string): Promise<string[]> {
+    const allItemIds = await this.getAllItemIds(courseVersionId);
+    const seenBankIds = new Set<string>();
+    const questionIds: string[] = [];
+
+    for (const itemId of allItemIds) {
+      const item = await this.itemRepo.readItem(courseVersionId, itemId);
+      if (!item || item.type !== 'QUIZ' || !('details' in item)) {
+        continue;
+      }
+
+      const details = (item as { details?: IQuizDetails }).details;
+      if (!details?.questionBankRefs?.length) {
+        continue;
+      }
+
+      for (const bankRef of details.questionBankRefs) {
+        const bankId = bankRef.bankId?.toString();
+        if (!bankId || seenBankIds.has(bankId)) {
+          continue;
+        }
+        seenBankIds.add(bankId);
+
+        const bank = await this.questionBankRepo.getById(bankId);
+        if (!bank?.questions?.length) {
+          continue;
+        }
+
+        questionIds.push(...bank.questions.map(q => q.toString()));
+      }
+    }
+
+    return [...new Set(questionIds)];
   }
 
   /**

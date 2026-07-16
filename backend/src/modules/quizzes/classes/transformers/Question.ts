@@ -15,6 +15,10 @@ import {
   QuestionReviewStatus,
 } from '#shared/interfaces/quiz.js';
 import {ObjectId} from 'mongodb';
+import {
+  ReviewOption,
+  ReviewQuestionResponse,
+} from '../../interfaces/review.js';
 import {QuestionBody} from '../validators/QuestionValidator.js';
 
 abstract class BaseQuestion implements IQuestion {
@@ -168,6 +172,82 @@ class QuestionFactory {
       default:
         throw new Error('Invalid question type');
     }
+  }
+}
+
+const LETTER_KEYS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as const;
+
+/**
+ * Converts a question instance (SOL / SML / OTL / NAT / DES) into a
+ * student-facing ReviewQuestionResponse — answer(s) are NEVER included.
+ *
+ * Security: `explaination` from ILotItem is intentionally omitted.
+ */
+export function toReviewQuestionResponse(
+  question: BaseQuestion,
+  quiz: {quizTitle: string | null; quizId: string | null} = {
+    quizTitle: null,
+    quizId: null,
+  },
+): ReviewQuestionResponse {
+  const base = {
+    id: question._id?.toString() ?? '',
+    body: question.text,
+    type: question.type,
+    hint: question.hint,
+    isParameterized: question.isParameterized,
+    options: [] as ReviewOption[],
+    quizTitle: quiz.quizTitle,
+    quizId: quiz.quizId,
+  };
+
+  switch (question.type) {
+    case 'SELECT_ONE_IN_LOT': {
+      const sol = question as SOLQuestion;
+      const allItems: ILotItem[] = [...(sol.incorrectLotItems ?? [])];
+      if (sol.correctLotItem) {
+        allItems.push(sol.correctLotItem);
+      }
+      return {
+        ...base,
+        options: allItems.slice(0, 8).map((item, i) => ({
+          key: LETTER_KEYS[i],
+          text: item.text,
+        })),
+      };
+    }
+
+    case 'SELECT_MANY_IN_LOT': {
+      const sml = question as SMLQuestion;
+      const allItems: ILotItem[] = [
+        ...(sml.incorrectLotItems ?? []),
+        ...(sml.correctLotItems ?? []),
+      ];
+      return {
+        ...base,
+        options: allItems.slice(0, 8).map((item, i) => ({
+          key: LETTER_KEYS[i],
+          text: item.text,
+        })),
+      };
+    }
+
+    case 'ORDER_THE_LOTS': {
+      const otl = question as OTLQuestion;
+      return {
+        ...base,
+        options: otl.ordering.slice(0, 8).map((order, i) => ({
+          key: LETTER_KEYS[i],
+          text: order.lotItem.text,
+        })),
+      };
+    }
+
+    // NUMERIC_ANSWER_TYPE and DESCRIPTIVE — no options in the UI
+    case 'NUMERIC_ANSWER_TYPE':
+    case 'DESCRIPTIVE':
+    default:
+      return {...base, options: []};
   }
 }
 

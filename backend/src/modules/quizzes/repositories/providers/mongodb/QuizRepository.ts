@@ -108,6 +108,37 @@ class QuizRepository {
 
     return quizzes;
   }
+
+  /**
+   * Find all QuizItem docs whose `details.questionBankRefs[].bankId` is in
+   * the given list. Unlike `findSkipAllowedQuizzes`, this does NOT filter
+   * on `details.allowSkip` — the call site needs every quiz that links to
+   * one of the banks, not just the ones with skip enabled.
+   *
+   * Used by `QuestionService._resolveParentQuiz` to attribute a question to
+   * its parent quiz for the spaced-repetition review card.
+   */
+  async findQuizzesByBankIds(
+    bankIds: string[],
+    session?: ClientSession,
+  ): Promise<QuizItem[] | null> {
+    await this.init();
+    const objectIds = bankIds.map(id => new ObjectId(id));
+    const quizzes = await this.quizCollection
+      .find(
+        {
+          'details.questionBankRefs.bankId': { $in: objectIds },
+        },
+        { session },
+      )
+      .toArray();
+
+    if (!quizzes.length) {
+      return null;
+    }
+
+    return quizzes;
+  }
 }
 
 export { QuizRepository };

@@ -9,6 +9,10 @@
   ProgressRepo: Symbol.for('ProgressRepo'),
   EnrollmentRepo: Symbol.for('EnrollmentRepo'),
   ItemRepo: Symbol.for('ItemRepo'),
+
+  // External services
+  SpacedRepetitionService: Symbol.for('SpacedRepetitionService'),
+  QuestionBankRepo: Symbol.for('QuestionBankRepo'),
 };
 
 export {TYPES as USERS_TYPES};

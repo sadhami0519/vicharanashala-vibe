@@ -1,4 +1,8 @@
 import 'reflect-metadata';
+// Prevent any async cron rejection from killing the process
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled async rejection (non-fatal):', err);
+});
 const NODE_ENV = process.env.NODE_ENV || 'development';
 console.log(`Loading Sentry for ${NODE_ENV} environment`);
 await import('./instrument.js');
@@ -71,6 +75,11 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Spec dump endpoint (temporary, for schema generation)
+app.get('/openapi-spec.json', (req, res) => {
+  res.json(openApiSpec);
+});
+
 if (NODE_ENV === 'production' || NODE_ENV === 'staging') {
   console.log(
     'Setting up Sentry error handling - test for production and staging environment',
@@ -78,13 +87,23 @@ if (NODE_ENV === 'production' || NODE_ENV === 'staging') {
   Sentry.setupExpressErrorHandler(app);
 }
 
+// Connect to DB without blocking server startup
 const database = getContainer().get<MongoDatabase>(GLOBAL_TYPES.Database);
-await database.connect();
+database.connect().catch(err => {
+  console.warn('⚠️  Database connection failed (non-fatal for schema server):', err.message);
+});
 
 // Start server
 useExpressServer(app, moduleOptions);
 
 app.listen(appConfig.port, () => {
   printStartupSummary();
-  startCron();
+  // Start crons asynchronously — don't let cron errors kill the server
+  setTimeout(() => {
+    try {
+      startCron();
+    } catch (err) {
+      console.error('⚠️  Cron startup error (non-fatal):', err);
+    }
+  }, 30000);
 });

@@ -10,7 +10,8 @@ export type NotificationType =
   | 'appeal_approved'
   | 'appeal_rejected'
   | 'mcq_submission_approved'
-  | 'mcq_submission_rejected';
+  | 'mcq_submission_rejected'
+  | 'review_reminder';
 
 export interface INotification {
   _id?: ObjectId | string;
