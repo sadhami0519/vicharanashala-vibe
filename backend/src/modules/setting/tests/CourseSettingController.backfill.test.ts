@@ -33,6 +33,7 @@ import { anomaliesContainerModule } from '#root/modules/anomalies/container.js';
 import { courseRegistrationContainerModule } from '#root/modules/courseRegistration/container.js';
 import { reportsContainerModule } from '#root/modules/reports/container.js';
 import { ejectionPolicyContainerModule } from '#root/modules/ejectionPolicy/container.js';
+import { emotionsContainerModule } from '#root/modules/emotions/container.js';
 import { genAIContainerModule } from '#root/modules/genAI/container.js';
 import { studentQuestionsContainerModule } from '#root/modules/studentQuestions/container.js';
 import { announcementsContainerModule } from '#root/modules/announcements/container.js';
@@ -75,6 +76,7 @@ describe('CourseSettingController — follow-up invite backfill', () => {
       courseRegistrationContainerModule,
       reportsContainerModule,
       ejectionPolicyContainerModule,
+      emotionsContainerModule,
       genAIContainerModule,
       studentQuestionsContainerModule,
       announcementsContainerModule,
