@@ -1081,6 +1081,18 @@ See `NEXT_STEPS_PLAN_NAV_AND_PHASE_B.md` for the full breakdown.
 > happy-path review session, quiz-title attribution, cron + email, retention dashboard,
 > API probes, automated tests, known gaps, and rollback.
 
+## Post-Merge: Existing Students — Backfill Required
+
+After this PR merges, **existing students who completed courses before the SR module was deployed will NOT automatically receive review emails**. The `review_items` collection is empty for them — seeding only happens at course completion via `ProgressService.stopItem()`. The cron only queries `review_items`; it has nothing to find for existing students.
+
+**One-time backfill script needed (post-merge, separately):**
+1. Query all completed enrollments that have no `review_items` yet
+2. Seed a `ReviewItem` per question for each completed course
+3. Stagger `next_review_at` across several days (e.g., hash student_id to spread over a week) so the cron doesn't fire 1,000 emails simultaneously on the first run
+4. New students completing courses after merge are seeded normally — no action needed
+
+This backfill is **not part of the PR**. It is a separate operational step to run once in production after deployment.
+
 ## References
 
 - [Spaced repetition ??? Wikipedia](https://en.wikipedia.org/wiki/spaced_repetition)
