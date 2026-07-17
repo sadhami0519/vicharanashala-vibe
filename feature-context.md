@@ -141,6 +141,7 @@ Base path: `/api/spaced-repetition`
 | `GET`  | `/:studentId/schedule`      | Get full review schedule for dashboard   |
 | `GET`  | `/:studentId/course/:courseId` | Get per-course retention health summary |
 | `PATCH`| `/:studentId/notifications` | Toggle notification opt-out for a course |
+| `POST` | `/:studentId/boost`         | Force a question to be due now; optional `targetEF` to reset difficulty |
 
 All routes are `@Authorized()`.
 
@@ -1029,13 +1030,42 @@ See `studentHpSystemLedgerRoute` as a pattern for a student-facing data screen.
 > Branch: `feat-sr-teacher-control` off `feat-spaced-repetition-module`
 
 Five scheduling knobs were identified for teacher-side control of spaced repetition.
-First slice (in progress): **Boost** + **Remediation Hints**.
+First slice (in progress): **Boost** (done, `be8d6a93`) + **Remediation Hints**.
 
 See `NEXT_STEPS_PLAN_NAV_AND_PHASE_B.md` for the full breakdown.
 
 ---
 
 ## Phase B  --  Teacher Control Knobs (In Progress)
+
+### Knob 1: Boost — `POST /api/spaced-repetition/:studentId/boost` (done)
+
+Teacher or admin forces a specific question to become due immediately for a student.
+Useful when: a student bombed an exam and needs urgent review on that topic.
+
+**Request body:**
+```json
+{
+  "questionId": "<question_id>",
+  "targetEF": 1.3   // optional, 1.3–3.0
+}
+```
+
+**Response:**
+```json
+{
+  "boosted": true,
+  "questionId": "...",
+  "next_review_at": "<now>",
+  "EF": 1.3,
+  "interval_days": 1,
+  "message": "Question boosted and EF reset to 1.3."
+}
+```
+
+**Implementation:** `be8d6a93` — `SpacedRepetitionController.ts` + `SpacedRepetitionService.ts` + `SpacedRepetitionValidator.ts`.
+
+### Knob 2: Remediation Hints — (pending)ss)
 
 > Branch: `feat-sr-teacher-control` off `feat-spaced-repetition-module`
 
