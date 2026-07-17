@@ -19,6 +19,8 @@ import {
   SubmitReviewBody,
   UpdateOptOutBody,
   UpdateOptOutResponse,
+  BoostReviewBody,
+  BoostResponse,
   StudentIdParam,
   StudentCourseParams,
   ReviewItemResponse,
@@ -138,6 +140,29 @@ class SpacedRepetitionController {
     const { studentId } = params;
     const { courseId, optOut } = body;
     return this.spacedRepetitionService.updateNotificationPreference(studentId, courseId, optOut);
+  }
+
+  @OpenAPI({
+    summary: 'Boost a review question (teacher control)',
+    description: `Forces a specific question to become due immediately for a student.
+    Optionally resets the easiness factor to a target value.
+    Use case: teacher/admin boosts a student who needs extra practice after an exam.
+    Teacher or admin role required.`,
+  })
+  @Authorized()
+  @Post('/:studentId/boost')
+  @HttpCode(200)
+  @ResponseSchema(BoostResponse, {
+    description: 'Updated state after boost',
+    statusCode: 200,
+  })
+  async boostReview(
+    @Params() params: StudentIdParam,
+    @Body() body: BoostReviewBody,
+  ): Promise<BoostResponse> {
+    const { studentId } = params;
+    const { questionId, targetEF } = body;
+    return this.spacedRepetitionService.boostReview(studentId, questionId, targetEF);
   }
 }
 

@@ -4,6 +4,10 @@ import {
   IsBoolean,
   IsNotEmpty,
   IsEnum,
+  IsOptional,
+  IsNumber,
+  Min,
+  Max,
   ArrayMinSize,
 } from 'class-validator';
 import { RecallQuality } from '#spacedRepetition/interfaces/IReviewItem.js';
@@ -49,6 +53,33 @@ export class UpdateOptOutBody {
 
   @IsBoolean()
   optOut: boolean;
+}
+
+/**
+ * Body for POST /:studentId/boost
+ * Sent by a teacher/admin to force a question to be due immediately
+ * for a specific student, optionally resetting the easiness factor.
+ *
+ * Use cases:
+ * - Student bombed an exam → boost all questions from that topic
+ * - Re-teach a concept → make it due again today
+ * - Set a question to maximum difficulty (targetEF = 1.3)
+ */
+export class BoostReviewBody {
+  @IsString()
+  @IsNotEmpty()
+  questionId: string;
+
+  /**
+   * Optional target easiness factor. If provided, the question's EF is
+   * set to this value directly (no SM-2 formula). Use 1.3 for "hardest"
+   * or 2.5 for "reset to neutral". If omitted, only next_review_at changes.
+   */
+  @IsOptional()
+  @IsNumber()
+  @Min(1.3)
+  @Max(3.0)
+  targetEF?: number;
 }
 
 // ── Route params ───────────────────────────────────────────────────────────
@@ -121,4 +152,17 @@ export class SeedScheduleResponse {
  */
 export class UpdateOptOutResponse {
   updatedCount: number;
+}
+
+/**
+ * Response for POST /:studentId/boost
+ * Returns the updated ReviewItem state after boosting.
+ */
+export class BoostResponse {
+  boosted: boolean;
+  questionId: string;
+  next_review_at: Date;
+  EF: number;
+  interval_days: number;
+  message: string;
 }

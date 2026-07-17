@@ -281,6 +281,77 @@ class SpacedRepetitionService extends BaseService {
       return { updatedCount: modifiedCount };
     });
   }
+
+  /**
+   * Forces a specific question to become due immediately for a student.
+   * Optionally resets the easiness factor.
+   *
+   * Called by a teacher or admin to "boost" a student who needs
+   * extra practice on a specific question or topic.
+   *
+   * @param studentId  - the student whose review item to boost
+   * @param questionId - the specific question to force-due
+   * @param targetEF   - optional; if provided, EF is set to this exact value
+   */
+  boostReview(
+    studentId: string,
+    questionId: string,
+    targetEF?: number,
+  ): Promise<{
+    boosted: boolean;
+    questionId: string;
+    next_review_at: Date;
+    EF: number;
+    interval_days: number;
+    message: string;
+  }> {
+    return this._withTransaction(async session => {
+      const item = await this.reviewItemRepo.findByStudentAndQuestion(
+        studentId,
+        questionId,
+        session,
+      );
+
+      if (!item) {
+        throw new NotFoundError(
+          'Review item not found for this student and question.',
+        );
+      }
+
+      const now = new Date();
+
+      const updates: Partial<IReviewItem> = {
+        next_review_at: now,
+        // If targetEF is provided, override directly.
+        // Otherwise leave EF unchanged — the card is just brought forward.
+        ...(targetEF !== undefined ? { EF: targetEF } : {}),
+      };
+
+      const updated = await this.reviewItemRepo.update(
+        item._id.toString(),
+        updates,
+        session,
+      );
+
+      if (!updated) {
+        throw new InternalServerError('Failed to boost review item.');
+      }
+
+      const message =
+        targetEF !== undefined
+          ? `Question boosted and EF reset to ${targetEF.toFixed(1)}.`
+          : 'Question boosted — due immediately.';
+
+      return {
+        boosted: true,
+        questionId,
+        next_review_at: updated.next_review_at,
+        EF: updated.EF,
+        interval_days: updated.interval_days,
+        message,
+      };
+    });
+  }
 }
 
 export { SpacedRepetitionService };
