@@ -12,6 +12,34 @@ import {
 } from 'class-validator';
 import { RecallQuality } from '#spacedRepetition/interfaces/IReviewItem.js';
 
+// ── Remediation hint DTOs (Knob 2) ─────────────────────────────────────────
+
+/**
+ * Body for PATCH /:studentId/remediation-hint
+ * Sent by a teacher/admin to attach or update a targeted hint for a student
+ * on a specific question. The hint is shown to the student ONLY after they
+ * answer incorrectly in a review session.
+ */
+export class SetRemediationHintBody {
+  @IsString()
+  @IsNotEmpty()
+  questionId: string;
+
+  /** The hint text to show after an incorrect answer. Pass null to clear. */
+  @IsOptional()
+  @IsString()
+  hint?: string | null;
+}
+
+/**
+ * Response for PATCH /:studentId/remediation-hint
+ */
+export class SetRemediationHintResponse {
+  questionId: string;
+  remediationHint: string | null;
+  message: string;
+}
+
 // ── Request bodies ─────────────────────────────────────────────────────────
 
 /**
@@ -125,6 +153,7 @@ export class ReviewItemResponse {
   next_review_at: Date;
   last_reviewed_at: Date | null;
   notification_opt_out: boolean;
+  remediationHint?: string | null;
 }
 
 /**

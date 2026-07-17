@@ -79,6 +79,16 @@ export interface IReviewItem {
   /** The datetime of the most recent review. Null until first review is completed. */
   last_reviewed_at: Date | null;
 
+  // ── Teacher-added remediation hint ────────────────────────────────────────
+
+  /**
+   * An optional, teacher-added hint shown to the student ONLY after they
+   * answer incorrectly in a review session. Different from the pre-attempt
+   * `hint` field on the Question schema — this is per-student, per-question,
+   * and only disclosed post-failure.
+   */
+  remediationHint?: string;
+
   // ── Opt-out ───────────────────────────────────────────────────────────────
 
   /**

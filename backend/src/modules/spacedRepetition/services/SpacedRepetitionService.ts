@@ -352,6 +352,64 @@ class SpacedRepetitionService extends BaseService {
       };
     });
   }
+
+  /**
+   * Sets or clears the remediation hint for a (student, question) pair.
+   * The hint is shown to the student ONLY after they answer incorrectly
+   * in a review session.
+   *
+   * Called by a teacher/admin to attach targeted post-failure guidance.
+   *
+   * @param studentId  - the student who will see the hint
+   * @param questionId - the specific question the hint relates to
+   * @param hint       - the hint text, or null/undefined to clear it
+   */
+  setRemediationHint(
+    studentId: string,
+    questionId: string,
+    hint: string | null | undefined,
+  ): Promise<{
+    questionId: string;
+    remediationHint: string | null;
+    message: string;
+  }> {
+    return this._withTransaction(async session => {
+      const item = await this.reviewItemRepo.findByStudentAndQuestion(
+        studentId,
+        questionId,
+        session,
+      );
+
+      if (!item) {
+        throw new NotFoundError(
+          'Review item not found for this student and question.',
+        );
+      }
+
+      const resolvedHint = hint === undefined ? null : hint;
+
+      const updated = await this.reviewItemRepo.update(
+        item._id.toString(),
+        { remediationHint: resolvedHint ?? undefined },
+        session,
+      );
+
+      if (!updated) {
+        throw new InternalServerError(
+          'Failed to update remediation hint.',
+        );
+      }
+
+      return {
+        questionId,
+        remediationHint: updated.remediationHint ?? null,
+        message:
+          resolvedHint != null
+            ? 'Remediation hint set.'
+            : 'Remediation hint cleared.',
+      };
+    });
+  }
 }
 
 export { SpacedRepetitionService };

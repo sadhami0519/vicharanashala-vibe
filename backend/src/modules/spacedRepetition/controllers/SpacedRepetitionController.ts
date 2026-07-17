@@ -25,6 +25,8 @@ import {
   StudentCourseParams,
   ReviewItemResponse,
   CourseRetentionResponse,
+  SetRemediationHintBody,
+  SetRemediationHintResponse,
 } from '../classes/validators/SpacedRepetitionValidator.js';
 
 @OpenAPI({ tags: ['Spaced Repetition'] })
@@ -163,6 +165,33 @@ class SpacedRepetitionController {
     const { studentId } = params;
     const { questionId, targetEF } = body;
     return this.spacedRepetitionService.boostReview(studentId, questionId, targetEF);
+  }
+
+  @OpenAPI({
+    summary: 'Set remediation hint for a student (teacher control)',
+    description: `Attaches a targeted hint to a specific (student, question) review item.
+    The hint is shown to the student ONLY after they answer incorrectly in a review session.
+    Pass null or omit the hint field to clear an existing hint.
+    Teacher or admin role required.`,
+  })
+  @Authorized()
+  @Patch('/:studentId/remediation-hint')
+  @HttpCode(200)
+  @ResponseSchema(SetRemediationHintResponse, {
+    description: 'Confirmation with current hint value',
+    statusCode: 200,
+  })
+  async setRemediationHint(
+    @Params() params: StudentIdParam,
+    @Body() body: SetRemediationHintBody,
+  ): Promise<SetRemediationHintResponse> {
+    const { studentId } = params;
+    const { questionId, hint } = body;
+    return this.spacedRepetitionService.setRemediationHint(
+      studentId,
+      questionId,
+      hint,
+    );
   }
 }
 
