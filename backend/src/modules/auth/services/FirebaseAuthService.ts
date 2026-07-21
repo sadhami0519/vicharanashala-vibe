@@ -4,6 +4,7 @@ import {
   ChangePasswordBody,
   GoogleSignUpBody,
 } from '#auth/classes/index.js';
+import crypto from 'node:crypto';
 import {IAuthService} from '#auth/interfaces/IAuthService.js';
 import {GLOBAL_TYPES} from '#root/types.js';
 import {injectable, inject} from 'inversify';
@@ -110,7 +111,19 @@ export class FirebaseAuthService extends BaseService implements IAuthService {
         admin.initializeApp({
           credential: admin.credential.cert({
             clientEmail: appConfig.firebase.clientEmail,
-            privateKey: appConfig.firebase.privateKey.replace(/\\n/g, '\n'),
+            privateKey: (() => {
+              // When connecting to the Firebase Auth emulator, use a valid PKCS8 structure.
+              // The emulator ignores the actual key content when FIREBASE_AUTH_EMULATOR_HOST is set.
+              if (process.env.FIREBASE_AUTH_EMULATOR_HOST) {
+                const { privateKey } = crypto.generateKeyPairSync('rsa', {
+                  modulusLength: 2048,
+                  publicKeyEncoding: { type: 'spki', format: 'pem' },
+                  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+                })
+                return privateKey
+              }
+              return appConfig.firebase.privateKey.replace(/\\n/g, '\n')
+            })(),
             projectId: appConfig.firebase.projectId,
           }),
         });
