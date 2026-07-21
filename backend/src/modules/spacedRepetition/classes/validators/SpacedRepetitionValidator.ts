@@ -319,3 +319,63 @@ export class BoostResponse {
   interval_days: number;
   message: string;
 }
+
+// ── Manual Review Assignment (Knob 7, Phase C, 2026-07-21) ───────────────
+
+/**
+ * Params for routes scoped to a specific courseId alone.
+ * e.g. GET /courses/:courseId/assignable-questions
+ */
+export class CourseIdParam {
+  @IsString()
+  @IsNotEmpty()
+  courseId: string;
+}
+
+/**
+ * Body for POST /:studentId/assign
+ * Sent by a teacher to manually put a question on a student's next-review queue.
+ */
+export class AssignReviewBody {
+  @IsString()
+  @IsNotEmpty()
+  questionId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  courseId: string;
+}
+
+/**
+ * One entry in the question picker. Mirrors the service-level shape.
+ */
+export class AssignableQuestionItem {
+  id: string;
+  body: string;
+  type: string;
+  hint: string | null;
+  bankIds: string[];
+  bankTitles: (string | null)[];
+  fromCourse: boolean;
+}
+
+/**
+ * Response for GET /courses/:courseId/assignable-questions
+ */
+export class GetAssignableQuestionsResponse {
+  courseId: string;
+  count: number;
+  questions: AssignableQuestionItem[];
+}
+
+/**
+ * Response for POST /:studentId/assign. The `autoEnabled` flag tells the
+ * frontend whether the assignment auto-re-enabled SR for the student (when
+ * it had been turned off by a teacher). Distinct from the `item` payload
+ * so the toast can surface it independently.
+ */
+export class AssignReviewResponse {
+  item: any; // IReviewItem shape; left `any` to avoid an extra import
+  autoEnabled: boolean;
+  message: string;
+}

@@ -97,6 +97,16 @@ export interface IReviewItem {
    */
   notification_opt_out: boolean;
   exam_prep_mode?: boolean;
+
+  /**
+   * Knob 7 (Phase C, 2026-07-21): origin of this ReviewItem.
+   * - 'auto-seed' (default for backward-compat with existing seeded items):
+   *   Created by `seedSchedule()` when the student completed a course.
+   * - 'manual': Created by a teacher via `POST /:studentId/assign`
+   *   (Manual Review Assignment). Distinct from algorithm-driven items
+   *   so analytics can report on teacher-pushed reviews separately.
+   */
+  source?: 'auto-seed' | 'manual';
 }
 
 /**

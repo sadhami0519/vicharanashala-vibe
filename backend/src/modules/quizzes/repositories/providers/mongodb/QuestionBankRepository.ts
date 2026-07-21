@@ -231,6 +231,38 @@ class QuestionBankRepository {
 
     return result.modifiedCount;
   }
+
+  /**
+   * Knob 7 (Phase C, 2026-07-21): find every question bank that belongs
+   * to the given course. Used by the spaced-repetition module's
+   * `getAssignableQuestions` endpoint to figure out which questions
+   * should be sorted to the top of the teacher picker ("questions from
+   * this course's banks first, then cross-bank").
+   *
+   * courseId is stored as either a string or an ObjectId in the wild;
+   * we filter on both forms so neither one slips through.
+   */
+  async findBanksByCourseId(
+    courseId: string,
+    session?: ClientSession,
+  ): Promise<IQuestionBank[]> {
+    await this.init();
+    let objectIdFilter: ObjectId | null = null;
+    try {
+      objectIdFilter = new ObjectId(courseId);
+    } catch {
+      // Not a valid ObjectId; fall back to the string-only filter below.
+    }
+    const orClauses: Record<string, unknown>[] = [
+      { courseId: courseId as unknown as ObjectId },
+    ];
+    if (objectIdFilter) {
+      orClauses.push({ courseId: objectIdFilter });
+    }
+    return this.questionBankCollection
+      .find({ $or: orClauses, isDeleted: { $ne: true } }, { session })
+      .toArray();
+  }
 }
 
 export {QuestionBankRepository};

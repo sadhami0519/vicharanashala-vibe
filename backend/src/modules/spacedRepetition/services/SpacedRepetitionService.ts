@@ -1,10 +1,13 @@
 import { injectable, inject } from 'inversify';
-import { NotFoundError, InternalServerError, ForbiddenError } from 'routing-controllers';
+import { NotFoundError, InternalServerError, ForbiddenError, HttpError } from 'routing-controllers';
 import { SPACED_REPETITION_TYPES } from '../types.js';
 import { BaseService } from '#root/shared/classes/BaseService.js';
 import { MongoDatabase } from '#shared/database/providers/mongo/MongoDatabase.js';
 import { GLOBAL_TYPES } from '#root/types.js';
 import { ReviewItemRepository, StudentSRStatusRepository } from '#spacedRepetition/repositories/index.js';
+import { QUIZZES_TYPES } from '#quizzes/types.js';
+import { QuestionBankRepository } from '#quizzes/repositories/providers/mongodb/QuestionBankRepository.js';
+import { QuestionRepository } from '#quizzes/repositories/providers/mongodb/QuestionRepository.js';
 import {
   IReviewItem,
   ISM2State,
@@ -42,6 +45,16 @@ class SpacedRepetitionService extends BaseService {
 
     @inject(SPACED_REPETITION_TYPES.StudentSRStatusRepo)
     private readonly studentSRStatusRepo: StudentSRStatusRepository,
+
+    // Knob 7 (Phase C, 2026-07-21): cross-module repos used by the manual
+    // review-assignment endpoints. QuestionBankRepo is owned by the quizzes
+    // module but registered globally via loadAppModules('all'), so we can
+    // @inject it from here without circular imports.
+    @inject(QUIZZES_TYPES.QuestionBankRepo)
+    private readonly questionBankRepo: QuestionBankRepository,
+
+    @inject(QUIZZES_TYPES.QuestionRepo)
+    private readonly questionRepo: QuestionRepository,
   ) {
     super(database);
   }
@@ -652,6 +665,288 @@ class SpacedRepetitionService extends BaseService {
           resolvedHint != null
             ? 'Remediation hint set.'
             : 'Remediation hint cleared.',
+      };
+    });
+  }
+
+  // ── Manual review assignment (Knob 7, Phase C, 2026-07-21) ─────────────
+
+  /**
+   * One entry in the question picker. `fromCourse` distinguishes items
+   * belonging to question banks of the requested course (sorted to top
+   * in the UI) from cross-bank entries (sorted to bottom but allowed).
+   */
+  private buildAssignableListEntry(args: {
+    question: { _id?: { toString(): string } | string; body?: string; type?: string; hint?: string; options?: unknown };
+    bankIds: string[];
+    bankTitles: (string | null)[];
+    fromCourse: boolean;
+  }): {
+    id: string;
+    body: string;
+    type: string;
+    hint: string | null;
+    bankIds: string[];
+    bankTitles: (string | null)[];
+    fromCourse: boolean;
+  } {
+    const q = args.question as any;
+    const rawId = q._id;
+    const id =
+      typeof rawId === 'string'
+        ? rawId
+        : rawId && typeof rawId.toString === 'function'
+          ? rawId.toString()
+          : '';
+    return {
+      id,
+      body: typeof q.body === 'string' ? q.body : '',
+      type: typeof q.type === 'string' ? q.type : 'UNKNOWN',
+      hint: typeof q.hint === 'string' ? q.hint : null,
+      bankIds: args.bankIds,
+      bankTitles: args.bankTitles,
+      fromCourse: args.fromCourse,
+    };
+  }
+
+  /**
+   * GET /courses/:courseId/assignable-questions
+   *
+   * Returns a de-duplicated list of questions the teacher can pick from
+   * to manually assign to a student. The shape lets the frontend group
+   * by `fromCourse` (the course's banks first, then cross-bank) without
+   * needing a second round-trip.
+   *
+   * Cross-bank policy (locked with Emie): the picker allows questions
+   * from any bank, not just the requested course's banks. The
+   * `fromCourse: true` flag is the hint the frontend uses to sort.
+   *
+   * No write occurs — this is read-only metadata.
+   */
+  async getAssignableQuestions(courseId: string): Promise<
+    Array<{
+      id: string;
+      body: string;
+      type: string;
+      hint: string | null;
+      bankIds: string[];
+      bankTitles: (string | null)[];
+      fromCourse: boolean;
+    }>
+  > {
+    // 1. Find every bank belonging to this course. The course's bank IDs
+    //    become the "fromCourse" set for the picker sort key.
+    const courseBanks = await this.questionBankRepo.findBanksByCourseId(courseId);
+    const courseBankIdSet = new Set<string>();
+    const courseBankTitleMap = new Map<string, string | null>();
+    for (const bank of courseBanks) {
+      const bankId =
+        typeof bank._id === 'string'
+          ? bank._id
+          : (bank._id as any)?.toString?.() ?? '';
+      if (bankId) {
+        courseBankIdSet.add(bankId);
+        courseBankTitleMap.set(bankId, (bank as any).title ?? null);
+      }
+    }
+
+    // 2. Enumerate every known bank, so we can also surface cross-bank
+    //    questions in the picker (allowed per the cross-bank policy).
+    const allBanksCollection = await this.database.getCollection<any>(
+      'questionBanks',
+    );
+    const allBanks = await allBanksCollection
+      .find({ isDeleted: { $ne: true } })
+      .toArray();
+
+    type Entry = {
+      id: string;
+      body: string;
+      type: string;
+      hint: string | null;
+      bankIds: string[];
+      bankTitles: (string | null)[];
+      fromCourse: boolean;
+    };
+
+    const entriesByQuestionId = new Map<string, Entry>();
+
+    for (const bank of allBanks) {
+      const bankId =
+        typeof bank._id === 'string'
+          ? bank._id
+          : (bank._id as any)?.toString?.() ?? '';
+      const bankTitle = (bank as any).title ?? null;
+      const fromCourse = courseBankIdSet.has(bankId);
+      const bankQuestions: unknown[] = Array.isArray((bank as any).questions)
+        ? ((bank as any).questions as unknown[])
+        : [];
+
+      // Resolve the question docs in this bank via QuestionRepository
+      // (a single $in query per bank is cheap; banks are small).
+      const questionIdStrings = bankQuestions
+        .map(q => {
+          if (typeof q === 'string') return q;
+          if (
+            q &&
+            typeof q === 'object' &&
+            typeof (q as any).toString === 'function'
+          ) {
+            return (q as any).toString();
+          }
+          return null;
+        })
+        .filter((s): s is string => typeof s === 'string');
+
+      if (questionIdStrings.length === 0) continue;
+
+      const questionDocs =
+        (await this.questionRepo.getByIds(questionIdStrings)) ?? [];
+
+      for (const question of questionDocs) {
+        const id =
+          typeof (question as any)._id === 'string'
+            ? (question as any)._id
+            : (question as any)._id?.toString?.() ?? '';
+        if (!id) continue;
+        const existing = entriesByQuestionId.get(id);
+        if (existing) {
+          // Same question referenced by multiple banks (normal). Add the
+          // additional bank to its bank list, but mark fromCourse true
+          // if ANY of its banks belong to the course.
+          existing.bankIds.push(bankId);
+          existing.bankTitles.push(bankTitle);
+          existing.fromCourse = existing.fromCourse || fromCourse;
+        } else {
+          entriesByQuestionId.set(
+            id,
+            this.buildAssignableListEntry({
+              question: question as any,
+              bankIds: [bankId],
+              bankTitles: [bankTitle],
+              fromCourse,
+            }),
+          );
+        }
+      }
+    }
+
+    // Sort: fromCourse entries first (preserving their relative order),
+    // then cross-bank entries.
+    const fromCourseEntries: Entry[] = [];
+    const crossBankEntries: Entry[] = [];
+    for (const entry of entriesByQuestionId.values()) {
+      if (entry.fromCourse) fromCourseEntries.push(entry);
+      else crossBankEntries.push(entry);
+    }
+
+    return [...fromCourseEntries, ...crossBankEntries];
+  }
+
+  /**
+   * POST /:studentId/assign
+   *
+   * Manually assign a question as the next-due review for a student.
+   *
+   * Behavior:
+   *  - If the student has SR disabled, we still create the assignment but
+   *    return `autoEnabled: true` so the frontend can show "SR was off,
+   *    now enabled for this student" in its toast.
+   *  - If a ReviewItem already exists for (student_id, question_id), we
+   *    throw ConflictError; the frontend offers Boost instead.
+   *  - The created item is tagged `source: 'manual'` so analytics can
+   *    distinguish teacher-driven assignments from auto-seeded ones.
+   *
+   * Returns the inserted item and a human-readable message.
+   */
+  async assignReview(
+    studentId: string,
+    questionId: string,
+    courseId: string,
+  ): Promise<{
+    item: IReviewItem;
+    autoEnabled: boolean;
+    message: string;
+  }> {
+    // 1. Verify the student exists in the users collection. If not, the
+    //    studentId was probably a typo or hasn't completed a course yet.
+    const usersCollection = await this.database.getCollection<any>('users');
+    const student = await usersCollection.findOne({ firebaseUID: studentId });
+    if (!student) {
+      throw new NotFoundError(
+        `No user found with firebaseUID '${studentId}'.`,
+      );
+    }
+
+    // 2. Verify the question exists.
+    const question = await this.questionRepo.getById(questionId);
+    if (!question) {
+      throw new NotFoundError(`No question found with id '${questionId}'.`);
+    }
+
+    // 3. Check the SR-disabled flag. If off, we'll auto-enable as part of
+    //    the assignment (emie's decision: don't silently undo the disable,
+    //    but also don't refuse; record the action so UI can surface it).
+    const srDisabled = await this.studentSRStatusRepo.getStatus(studentId);
+    let autoEnabled = false;
+
+    return this._withTransaction(async session => {
+      if (srDisabled) {
+        const matched = await this.studentSRStatusRepo.setStatus(
+          studentId,
+          false,
+          session,
+        );
+        autoEnabled = matched;
+      }
+
+      // 4. Reject duplicate (student, question) pairs — the unique index
+      //    (student_id, question_id) would catch it anyway but we want a
+      //    clean 409 ConflictError for the frontend's "Boost instead" UI.
+      const existing = await this.reviewItemRepo.findByStudentAndQuestion(
+        studentId,
+        questionId,
+        session,
+      );
+      if (existing) {
+        // 409 Conflict: the (student, question) pair already exists.
+        // routing-controllers doesn't export a ConflictError class, but
+        // throwing an HttpError with code 409 lets the default error
+        // handler produce a clean 409 response for the frontend's
+        // "Boost instead" path.
+        throw new HttpError(
+          409,
+          `This student already has a review item for question ${questionId}. Use Boost to surface it as overdue.`,
+        );
+      }
+
+      // 5. Insert the new ReviewItem. Set source: 'manual' so analytics
+      //    can tell this apart from algorithm-driven items. Start at the
+      //    SM-2 defaults so the first manual review behaves identically
+      //    to the first auto-seeded review.
+      const newItem: Omit<IReviewItem, '_id'> = {
+        student_id: studentId,
+        course_id: courseId,
+        question_id: questionId,
+        n: 0,
+        EF: DEFAULT_SM2_STATE.EF,
+        interval_days: 0,
+        // Mark due immediately: the whole point of manual assignment is
+        // "this should be the next thing they see".
+        next_review_at: new Date(),
+        last_reviewed_at: null,
+        notification_opt_out: false,
+        source: 'manual',
+      };
+
+      const inserted = await this.reviewItemRepo.create(newItem, session);
+
+      return {
+        item: inserted,
+        autoEnabled,
+        message: autoEnabled
+          ? `Assigned. Note: SR was disabled for this student; it has been re-enabled to make the assignment actionable.`
+          : `Assigned ${questionId} to ${studentId}'s review queue.`,
       };
     });
   }

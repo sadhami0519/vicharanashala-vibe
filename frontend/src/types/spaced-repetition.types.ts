@@ -16,6 +16,16 @@ export interface ReviewItem {
   notification_opt_out: boolean;
   exam_prep_mode?: boolean;
   remediation_hint?: string | null;
+  /**
+   * Knob 7 (Phase C, 2026-07-21): origin of this ReviewItem.
+   * - 'auto-seed' (default for backward-compat): created by the backend
+   *   seedSchedule() when the student completed a course.
+   * - 'manual': created by a teacher via POST /:studentId/assign.
+   * Mirrors the backend IReviewItem.source field. Mock items use this to
+   * distinguish teacher-driven from algorithm-driven assignments in the
+   * retention dashboard / cohort table.
+   */
+  source?: 'auto-seed' | 'manual';
 }
 
 export interface CourseRetentionSummary {

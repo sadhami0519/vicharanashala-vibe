@@ -15,6 +15,8 @@ import {
   getStudentSRStatus,
   setStudentSRDisabled,
   bulkSetStudentSRDisabled,
+  getAssignableQuestions,
+  assignReview,
 } from '@/lib/spaced-repetition-api';
 
 // ── Query keys ─────────────────────────────────────────────────────────────
@@ -28,6 +30,8 @@ export const spacedRepetitionKeys = {
     ['spaced-repetition', 'course-students', courseId] as const,
   srStatus: (studentId: string) =>
     ['spaced-repetition', 'sr-status', studentId] as const,
+  assignableQuestions: (courseId: string) =>
+    ['spaced-repetition', 'assignable-questions', courseId] as const,
 };
 
 // ── Queries ────────────────────────────────────────────────────────────────
@@ -223,6 +227,38 @@ export function useBulkSetStudentSRDisabled() {
           queryKey: spacedRepetitionKeys.srStatus(id),
         });
       }
+    },
+  });
+}
+
+// ── Manual Review Assignment hooks (Knob 7, Phase C, 2026-07-21) ────────
+
+export function useGetAssignableQuestions(courseId: string) {
+  return useQuery({
+    queryKey: spacedRepetitionKeys.assignableQuestions(courseId),
+    queryFn: () => getAssignableQuestions(courseId),
+    enabled: !!courseId && courseId.length > 5,
+  });
+}
+
+export function useAssignReview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      studentId: string;
+      questionId: string;
+      courseId: string;
+    }) => assignReview(args),
+    onSuccess: (_, variables) => {
+      // Force the schedule to refetch (the new item shows up in the
+      // student's queue immediately) and the course-assignable list
+      // doesn't change (GET is a read-only metadata fetch).
+      queryClient.invalidateQueries({
+        queryKey: spacedRepetitionKeys.schedule(variables.studentId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: spacedRepetitionKeys.srStatus(variables.studentId),
+      });
     },
   });
 }

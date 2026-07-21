@@ -3,16 +3,26 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Loader2, Zap, PauseCircle, PlayCircle, GraduationCap, Users, BookOpen, BrainCircuit, MessageSquareText, RotateCcw, CheckSquare, Square, Ban, Power } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Loader2, Zap, PauseCircle, PlayCircle, GraduationCap, Users, BookOpen, BrainCircuit, MessageSquareText, RotateCcw, CheckSquare, Square, Ban, Power, Send, Library } from "lucide-react";
 import { toast } from "sonner";
-import { 
-  useBoostReview, 
-  useSetRemediationHint, 
-  useBulkUpdateNotifications, 
+import {
+  useBoostReview,
+  useSetRemediationHint,
+  useBulkUpdateNotifications,
   useBulkUpdateExamPrep,
   useGetCourseStudents,
   useResetReview,
-  useBulkSetStudentSRDisabled
+  useBulkSetStudentSRDisabled,
+  useGetAssignableQuestions,
+  useAssignReview,
 } from "@/hooks/spaced-repetition-hooks";
 import { resetMockState } from "@/lib/spaced-repetition-api";
 import { InfoPopover } from "@/components/InfoPopover";
@@ -106,6 +116,97 @@ export default function ReviewScheduler() {
       ),
       onError: (err) => toast.error(err.message),
     });
+  };
+
+  // --- Manual Review Assignment (Knob 7, Phase C, 2026-07-21) ---
+
+  // Dialog open state + selected question inside the picker. The dialog
+  // requires exactly 1 student to be selected when opened, so we resolve
+  // the target student at open-time and keep it in a ref-like piece of
+  // state.
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [assignForStudent, setAssignForStudent] = useState<string | null>(null);
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string>("");
+
+  // Fetch the assignable question catalogue for the current course.
+  // We only fire when the dialog is open AND the courseId is set, so the
+  // list isn't pulled for every teacher sitting on the dashboard.
+  const { data: assignableData, isLoading: isLoadingAssignable } =
+    useGetAssignableQuestions(courseId, assignDialogOpen);
+
+  // The assign mutation. We don't pass studentId to the hook (single
+  // student per dialog invocation), so we just call mutate() inside the
+  // dialog's submit handler.
+  const assignMutation = useAssignReview();
+
+  // Boost mutation used as the recovery path when the assignment collides
+  // with an existing item (409). Keeps the user in flow — they pick a
+  // question, find out it's already assigned, and the dialog offers to
+  // surface it as overdue without forcing a re-open.
+  const boostMutationKnob7 = useBoostReview();
+
+  const openAssignDialog = () => {
+    if (!courseId) return toast.error("Pick a course first.");
+    if (selectedStudents.length === 0) {
+      return toast.error("Select exactly one student to assign a review to.");
+    }
+    if (selectedStudents.length > 1) {
+      return toast.error(
+        "Manual assignment works on one student at a time. Reduce your selection and try again.",
+      );
+    }
+    setAssignForStudent(selectedStudents[0]);
+    setSelectedQuestionId("");
+    setAssignDialogOpen(true);
+  };
+
+  const submitAssign = () => {
+    if (!assignForStudent) return;
+    if (!selectedQuestionId) return toast.error("Pick a question first.");
+    assignMutation.mutate(
+      { studentId: assignForStudent, questionId: selectedQuestionId, courseId },
+      {
+        onSuccess: (data) => {
+          if (data.autoEnabled) {
+            toast.success(
+              "Assigned. SR was disabled for this student — re-enabled to make the assignment actionable.",
+            );
+          } else {
+            toast.success(`Assigned "${selectedQuestionId}" to the student's queue.`);
+          }
+          setAssignDialogOpen(false);
+          setSelectedQuestionId("");
+          setAssignForStudent(null);
+        },
+        onError: (err: Error & { status?: number }) => {
+          if (err.status === 409) {
+            // Item already exists. Offer Boost instead: keep the dialog
+            // open so the teacher sees the recovery action without losing
+            // their pick.
+            toast.warning(
+              "Already in this student's queue. Boosting it instead...",
+              { duration: 2500 },
+            );
+            boostMutationKnob7.mutate(
+              { studentId: assignForStudent, questionId: selectedQuestionId },
+              {
+                onSuccess: () => {
+                  toast.success("Boosted — the question is now due.");
+                  setAssignDialogOpen(false);
+                  setSelectedQuestionId("");
+                  setAssignForStudent(null);
+                },
+                onError: (boostErr) => {
+                  toast.error(`Boost also failed: ${boostErr.message}`);
+                },
+              },
+            );
+          } else {
+            toast.error(`Assign failed: ${err.message}`);
+          }
+        },
+      },
+    );
   };
 
   return (
@@ -264,6 +365,49 @@ export default function ReviewScheduler() {
               </CardContent>
             </Card>
 
+            {/* Manual Review Assignment (Knob 7, Phase C, 2026-07-21). Sits between
+                per-card adjustments and the demo controls because it’s a teacher
+                action, not demo bookkeeping. */}
+            <Card className="shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Send className="h-5 w-5 text-primary" /> 4. Manual Review Assignment
+                </CardTitle>
+                <CardDescription>
+                  Put a specific question on a single student's next-review queue.
+                  Use this to surface a tricky concept they missed in class, or to
+                  target a remediation question at one learner.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="text-xs text-muted-foreground bg-muted/40 rounded-md p-2.5 border border-border/40">
+                  Select <span className="font-medium">exactly one</span> student in
+                  the targets panel above, then click the button below to open the
+                  question picker.
+                </div>
+                <Button
+                  variant="default"
+                  className="w-full h-11 justify-start"
+                  onClick={openAssignDialog}
+                  disabled={!courseId || selectedStudents.length === 0}
+                  title={
+                    !courseId
+                      ? 'Pick a course first'
+                      : selectedStudents.length === 0
+                        ? 'Select one student in the targets panel'
+                        : selectedStudents.length > 1
+                          ? 'Reduce to one student'
+                          : 'Open the question picker'
+                  }
+                >
+                  <Send className="mr-2 h-4 w-4" /> Assign a Review to{' '}
+                  {selectedStudents.length === 1
+                    ? `Student ${selectedStudents[0].substring(0, 5).toUpperCase()}`
+                    : 'Selected Student'}
+                </Button>
+              </CardContent>
+            </Card>
+
             {/* Demo controls — mock data only. Visible only when USE_MOCK is true. */}
             <Card className="bg-amber-50/40 dark:bg-amber-950/10 border-amber-300/40 border-dashed shadow-sm">
               <CardHeader className="pb-3">
@@ -296,6 +440,129 @@ export default function ReviewScheduler() {
           </div>
         </div>
       </div>
+
+      {/* Manual Review Assignment dialog (Knob 7). Lives at the root so
+          it overlays the entire page regardless of which Card the user
+          triggered from. */}
+      <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-4 w-4 text-primary" />
+              Assign a Review
+            </DialogTitle>
+            <DialogDescription>
+              {assignForStudent ? (
+                <>
+                  Pick a question to put on{' '}
+                  <span className="font-medium text-foreground">
+                    Student {assignForStudent.substring(0, 5).toUpperCase()}
+                  </span>
+                  's next-review queue. The student will see it on their next
+                  visit to the review screen.
+                </>
+              ) : (
+                'Pick a question.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            {isLoadingAssignable ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-6">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading question
+                catalogue…
+              </div>
+            ) : (assignableData?.questions ?? []).length === 0 ? (
+              <div className="text-sm text-muted-foreground py-6 text-center border border-dashed rounded-md">
+                No questions found in this course's banks. Add banks to the course first.
+              </div>
+            ) : (
+              <>
+                <div className="text-xs text-muted-foreground flex items-center gap-1.5 pb-1">
+                  <Library className="h-3.5 w-3.5" />
+                  {assignableData?.questions.filter((q) => q.fromCourse).length ?? 0}{' '}
+                  from this course ·{' '}
+                  {assignableData?.questions.filter((q) => !q.fromCourse).length ?? 0}{' '}
+                  cross-bank
+                </div>
+                <div className="space-y-1.5 max-h-[40vh] overflow-y-auto pr-1">
+                  {assignableData?.questions.map((q) => {
+                    const isSelected = selectedQuestionId === q.id;
+                    return (
+                      <button
+                        key={q.id}
+                        type="button"
+                        onClick={() => setSelectedQuestionId(q.id)}
+                        className={
+                          'w-full text-left rounded-md border p-3 transition-colors ' +
+                          (isSelected
+                            ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                            : 'border-border hover:bg-muted/40')
+                        }
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="text-sm font-medium leading-snug">
+                            {q.body}
+                          </div>
+                          {q.fromCourse ? (
+                            <span className="shrink-0 text-[10px] uppercase tracking-wide font-medium rounded-full bg-primary/10 text-primary px-2 py-0.5">
+                              Course
+                            </span>
+                          ) : (
+                            <span className="shrink-0 text-[10px] uppercase tracking-wide font-medium rounded-full bg-muted text-muted-foreground px-2 py-0.5">
+                              Cross-bank
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1.5 text-xs text-muted-foreground">
+                          from{' '}
+                          <span className="italic">
+                            {q.bankTitles.filter(Boolean).join(', ') || 'Unknown bank'}
+                          </span>{' '}
+                          · <span className="font-mono">{q.type}</span>
+                        </div>
+                        {q.hint && (
+                          <div className="mt-1.5 text-xs text-muted-foreground italic">
+                            Hint: {q.hint}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAssignDialogOpen(false);
+                setSelectedQuestionId('');
+                setAssignForStudent(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={submitAssign}
+              disabled={!selectedQuestionId || assignMutation.isPending}
+            >
+              {assignMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Assigning…
+                </>
+              ) : (
+                <>
+                  <Send className="mr-2 h-4 w-4" /> Assign
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

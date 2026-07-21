@@ -683,3 +683,199 @@ export async function bulkSetStudentSRDisabled(
     body: JSON.stringify({ studentIds, sr_disabled }),
   });
 }
+
+// ── Manual Review Assignment (Knob 7, Phase C, 2026-07-21) ───────────────
+
+/**
+ * One entry returned by GET /courses/:courseId/assignable-questions.
+ * Mirrors the AssignableQuestionItem backend DTO.
+ *
+ * `fromCourse: true` flags questions whose bank belongs to the requested
+ * course — these are sorted to the top of the picker. `fromCourse: false`
+ * entries are cross-bank questions (still allowed per the Knob 7 UX rule
+ * locked with Emie).
+ */
+export type AssignableQuestion = {
+  id: string;
+  body: string;
+  type: string;
+  hint: string | null;
+  bankIds: string[];
+  bankTitles: (string | null)[];
+  fromCourse: boolean;
+};
+
+/**
+ * Mock catalogue used when USE_MOCK = true. The four fromCourse entries
+ * cover the questions already referenced by MOCK_REVIEW_ITEMS, plus a
+ * pair of cross-bank entries to demonstrate the picker tier. Mirrors the
+ * backend's `getAssignableQuestions` contract — left in this file rather
+ * than ReviewSession.tsx because it's an API mock, not session data.
+ */
+const MOCK_ASSIGNABLE_QUESTIONS: AssignableQuestion[] = [
+  {
+    id: 'mock-question-1',
+    body: 'Which of the following are linear data structures?',
+    type: 'SELECT_MANY_IN_LOT',
+    hint: 'Linear means each element has at most one predecessor and one successor.',
+    bankIds: ['mock-bank-cs1'],
+    bankTitles: ['Mock CS Question Bank'],
+    fromCourse: true,
+  },
+  {
+    id: 'mock-question-2',
+    body: 'What is the worst-case time complexity of binary search on a sorted array?',
+    type: 'SELECT_ONE_IN_LOT',
+    hint: 'Divide-and-conquer halves the search space each step.',
+    bankIds: ['mock-bank-cs1'],
+    bankTitles: ['Mock CS Question Bank'],
+    fromCourse: true,
+  },
+  {
+    id: 'mock-question-3',
+    body: 'Which sorting algorithm is stable?',
+    type: 'SELECT_ONE_IN_LOT',
+    hint: 'Stability preserves the relative order of equal elements.',
+    bankIds: ['mock-bank-cs1'],
+    bankTitles: ['Mock CS Question Bank'],
+    fromCourse: true,
+  },
+  {
+    id: 'mock-question-4',
+    body: 'What port does DNS use by default?',
+    type: 'SELECT_ONE_IN_LOT',
+    hint: 'It is an application-layer service running over UDP.',
+    bankIds: ['mock-bank-cs1'],
+    bankTitles: ['Mock CS Question Bank'],
+    fromCourse: true,
+  },
+  // Cross-bank examples (locked with Emie: cross-bank is allowed, course's
+  // banks sorted to top). These use a different bankId/bankTitle so the
+  // picker can render a visible "Other banks" section header.
+  {
+    id: 'mock-question-cross-1',
+    body: 'In a relational DB, a foreign key constraint enforces…',
+    type: 'SELECT_ONE_IN_LOT',
+    hint: 'It links rows across tables.',
+    bankIds: ['mock-bank-cross'],
+    bankTitles: ['Sample Cross-Bank Collection'],
+    fromCourse: false,
+  },
+  {
+    id: 'mock-question-cross-2',
+    body: 'What does ACID stand for?',
+    type: 'SELECT_MANY_IN_LOT',
+    hint: 'Atomicity, Consistency, Isolation, Durability.',
+    bankIds: ['mock-bank-cross'],
+    bankTitles: ['Sample Cross-Bank Collection'],
+    fromCourse: false,
+  },
+];
+
+/**
+ * GET /api/spaced-repetition/courses/:courseId/assignable-questions
+ *
+ * Returns the question catalogue the teacher assigns from. Sorted so the
+ * course's banks come first, then cross-bank entries (the picker tier
+ * the Knob 7 UX relies on).
+ *
+ * In mock mode we ignore courseId entirely — every demo course has the
+ * same set of mock questions, and the demo only has one teacher anyway.
+ * In live mode this hits the backend.
+ */
+export async function getAssignableQuestions(
+  courseId: string,
+): Promise<{ courseId: string; count: number; questions: AssignableQuestion[] }> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 150));
+    return {
+      courseId,
+      count: MOCK_ASSIGNABLE_QUESTIONS.length,
+      questions: MOCK_ASSIGNABLE_QUESTIONS,
+    };
+  }
+  return apiFetch(
+    `/api/spaced-repetition/courses/${courseId}/assignable-questions`,
+  );
+}
+
+/**
+ * POST /api/spaced-repetition/:studentId/assign
+ *
+ * Assigns a question manually to a student's next-review queue.
+ *
+ * Conflict policy: when the (student, question) pair already exists, the
+ * backend returns 409. We surface that to the caller as a thrown Error
+ * whose `.status === 409` so the UI can swap to the "Boost instead" flow.
+ *
+ * Mock behaviour: append a new ReviewItem to the local MOCK_REVIEW_ITEMS
+ * for the student, mirroring what the backend would persist. Persist the
+ * updated state to localStorage so the change survives a reload.
+ */
+export async function assignReview(args: {
+  studentId: string;
+  questionId: string;
+  courseId: string;
+}): Promise<{ item: ReviewItem; autoEnabled: boolean; message: string }> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 200));
+
+    // The mock store keeps every active student schedule in a flat array.
+    // Block (student, question) duplicates to mirror the backend's unique
+    // (student_id, question_id) index.
+    const existing = MOCK_REVIEW_ITEMS.find(
+      i =>
+        i.student_id === args.studentId &&
+        i.question_id === args.questionId,
+    );
+    if (existing) {
+      const err = new Error(
+        'A review item already exists for this question. Use Boost to surface it as overdue.',
+      ) as Error & { status?: number };
+      err.status = 409;
+      throw err;
+    }
+
+    // If the student was SR-disabled, the mock auto-re-enables (matches
+    // the backend behaviour locked with Emie). Mirror it on the mock
+    // store so subsequent reads see the new flag.
+    const wasDisabled = MOCK_SR_DISABLED.has(args.studentId);
+    if (wasDisabled) {
+      MOCK_SR_DISABLED.delete(args.studentId);
+      persistSRDisabledState(MOCK_SR_DISABLED);
+    }
+
+    const inserted: ReviewItem = {
+      _id: `mock-assign-${Date.now()}`,
+      student_id: args.studentId,
+      course_id: args.courseId,
+      question_id: args.questionId,
+      n: 0,
+      EF: 2.5,
+      interval_days: 0,
+      next_review_at: new Date().toISOString(),
+      last_reviewed_at: null,
+      remediation_hint: undefined,
+      notification_opt_out: false,
+      source: 'manual',
+    };
+    MOCK_REVIEW_ITEMS.push(inserted);
+    persistMockState();
+
+    return {
+      item: inserted,
+      autoEnabled: wasDisabled,
+      message: wasDisabled
+        ? 'Assigned. Note: SR was disabled for this student; it has been re-enabled to make the assignment actionable.'
+        : `Assigned ${args.questionId} to ${args.studentId}'s review queue.`,
+    };
+  }
+
+  return apiFetch(`/api/spaced-repetition/${args.studentId}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({
+      questionId: args.questionId,
+      courseId: args.courseId,
+    }),
+  });
+}

@@ -321,6 +321,14 @@ function TeacherSection() {
           the navigation entry; landing on it shows a message that their
           teacher has paused it. Re-enable at any time.
         </li>
+        <li>
+          <span className="font-medium">Assign a review</span> puts a
+          specific question on a single student's next-review queue. Pick a
+          student, then choose from the question catalogue &mdash; entries
+          from this course's banks appear first, followed by cross-bank
+          entries. If a question is already in the student's queue, the
+          dialog offers to <em>boost</em> it instead (no duplicate).
+        </li>
       </ul>
     </div>
   );

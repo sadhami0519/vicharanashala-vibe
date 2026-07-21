@@ -39,6 +39,10 @@ import {
   StudentSRStatusResponse,
   BulkSetStudentSRDisabledBody,
   BulkSetStudentSRDisabledResponse,
+  AssignReviewBody,
+  AssignReviewResponse,
+  GetAssignableQuestionsResponse,
+  CourseIdParam,
 } from '../classes/validators/SpacedRepetitionValidator.js';
 
 @OpenAPI({ tags: ['Spaced Repetition'] })
@@ -367,6 +371,59 @@ class SpacedRepetitionController {
       sr_disabled,
     );
     return result;
+  }
+
+  // ── Manual Review Assignment (Knob 7, Phase C, 2026-07-21) ─────────────
+
+  /**
+   * GET /api/spaced-repetition/courses/:courseId/assignable-questions
+   *
+   * Returns the question list used by the teacher-side assign dialog.
+   * Sorted so questions from the course's banks come first (the
+   * `fromCourse: true` flag) followed by every other question from
+   * any bank (the cross-bank policy).
+   */
+  @Authorized()
+  @Get('/courses/:courseId/assignable-questions')
+  @ResponseSchema(GetAssignableQuestionsResponse)
+  async getAssignableQuestions(
+    @Params() params: CourseIdParam,
+  ): Promise<GetAssignableQuestionsResponse> {
+    const questions =
+      await this.spacedRepetitionService.getAssignableQuestions(
+        params.courseId,
+      );
+    return {
+      courseId: params.courseId,
+      count: questions.length,
+      questions,
+    };
+  }
+
+  /**
+   * POST /api/spaced-repetition/:studentId/assign
+   *
+   * Manually put a question on a student's next-review queue. If a
+   * ReviewItem already exists for (student, question) returns 409
+   * ConflictError; the frontend offers Boost instead.
+   *
+   * If SR is disabled for the student, this auto-enables it (with
+   * `autoEnabled: true` in the response) so the assignment is
+   * actually actionable. The frontend surfaces this in a toast.
+   */
+  @Authorized()
+  @Post('/:studentId/assign')
+  @HttpCode(200)
+  @ResponseSchema(AssignReviewResponse)
+  async assignReview(
+    @Params() params: StudentIdParam,
+    @Body() body: AssignReviewBody,
+  ): Promise<AssignReviewResponse> {
+    return this.spacedRepetitionService.assignReview(
+      params.studentId,
+      body.questionId,
+      body.courseId,
+    );
   }
 }
 
