@@ -22,9 +22,10 @@ import {
   ChevronRight,
   BookOpen,
   TrendingUp,
+  Flame,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
-import { Link } from '@tanstack/react-router';
+import { Link, useSearch } from '@tanstack/react-router';
 import {
   useGetSchedule,
   useGetCourseRetention,
@@ -34,6 +35,7 @@ import {
   ReviewItem,
   RecallQuality,
 } from '@/types/spaced-repetition.types';
+import { DEMO_STUDENT_ID, isDemoStudentEmail } from '@/lib/spaced-repetition-api';
 
 // ── Local mock question body — replaces GET /api/quizzes/questions/:id/review
 // while the backend is offline. Mirrors the ReviewQuestionResponse shape:
@@ -56,31 +58,53 @@ interface ReviewQuestionResponse {
   quizId: string | null;
 }
 
+// Demo content (2026-07-21): CS fundamentals across all four mock cards so
+// the demo has a coherent subject narrative that matches the
+// "Demo Spaced Repetition Course" / "Algorithms & Data Structures" course
+// labels referenced by RetentionDashboard. Each card exercises a different
+// question type so the demo showcases the full UX surface:
+//   - mock-question-1 → SELECT_MANY_IN_LOT (multi-select UX)
+//   - mock-question-2 → SELECT_ONE_IN_LOT (single-choice UX)
+//   - mock-question-3 → NUMERIC_ANSWER   (numeric-input UX)
+//   - mock-question-4 → SELECT_ONE_IN_LOT (extra card added so the
+//     existing MOCK_REVIEW_ITEMS.mock-item-6 (which references
+//     'mock-question-4' from 2026-07-18 teacher-control cohort work)
+//     no longer crashes with "No mock question for mock-question-4")
 const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
   'mock-question-1': {
     id: 'mock-question-1',
-    body: 'What is the capital of France?',
-    type: 'SELECT_ONE_IN_LOT',
-    hint: 'Think of the City of Light.',
-    options: ['London', 'Berlin', 'Paris', 'Madrid'],
-    quizTitle: 'European Capitals',
+    body: 'Which of the following are linear data structures?',
+    type: 'SELECT_MANY_IN_LOT',
+    hint: 'Linear means each element has at most one predecessor and one successor.',
+    options: ['Array', 'Linked List', 'Binary Tree', 'Stack'],
+    quizTitle: 'Data Structures',
     quizId: 'mock-quiz-1',
   },
   'mock-question-2': {
     id: 'mock-question-2',
-    body: 'Which of the following are prime numbers?',
-    type: 'SELECT_MANY_IN_LOT',
-    hint: 'Numbers greater than 1 with exactly two divisors.',
-    options: ['2', '4', '7', '9'],
-    quizTitle: 'Prime Numbers',
+    body: 'What is the worst-case time complexity of binary search on a sorted array?',
+    type: 'SELECT_ONE_IN_LOT',
+    hint: 'Divide-and-conquer halves the search space each step.',
+    options: ['O(1)', 'O(log n)', 'O(n)', 'O(n log n)'],
+    quizTitle: 'Algorithms',
     quizId: 'mock-quiz-1',
   },
   'mock-question-3': {
     id: 'mock-question-3',
-    body: 'What is 12 × 8?',
+    body: 'How many bits are in a byte?',
     type: 'NUMERIC_ANSWER',
+    hint: 'A nibble is half of this.',
     options: [],
-    quizTitle: 'Basic Arithmetic',
+    quizTitle: 'CS Fundamentals',
+    quizId: 'mock-quiz-2',
+  },
+  'mock-question-4': {
+    id: 'mock-question-4',
+    body: 'Which layer of the OSI model is responsible for routing packets?',
+    type: 'SELECT_ONE_IN_LOT',
+    hint: 'It sits between Transport and Data Link.',
+    options: ['Application', 'Transport', 'Network', 'Data Link'],
+    quizTitle: 'Networking & OS',
     quizId: 'mock-quiz-2',
   },
 };
@@ -332,7 +356,13 @@ const QUALITY_META: Record<
 
 export default function ReviewSession() {
   const { user } = useAuthStore();
-  const studentId = user?.uid ?? '';
+  // See RetentionDashboard for rationale. Demo email -> seeded DEMO_STUDENT_ID.
+  const studentId =
+    isDemoStudentEmail(user?.email) ? DEMO_STUDENT_ID : (user?.uid ?? '');
+
+  // Intercept the URL parameter to route targeted reviews
+  const search = useSearch({ strict: false });
+  const targetCourseId = (search as any).courseId as string | undefined;
 
   const {
     data: schedule,
@@ -348,12 +378,22 @@ export default function ReviewSession() {
   const dueItems = useMemo(() => {
     if (!schedule) return [];
     const now = Date.now();
-    return schedule.filter(
+    
+    // 1. Filter out opted-out, future items, AND non-matching courses
+    const filtered = schedule.filter(
       item =>
         !item.notification_opt_out &&
-        new Date(item.next_review_at).getTime() <= now,
+        new Date(item.next_review_at).getTime() <= now &&
+        (!targetCourseId || item.course_id === targetCourseId)
     );
-  }, [schedule]);
+
+    // 2. Sort: Exam Prep items FIRST, then chronological
+    return filtered.sort((a, b) => {
+      if (a.exam_prep_mode && !b.exam_prep_mode) return -1;
+      if (!a.exam_prep_mode && b.exam_prep_mode) return 1;
+      return new Date(a.next_review_at).getTime() - new Date(b.next_review_at).getTime();
+    });
+  }, [schedule, targetCourseId]);
 
   const totalDueCount = dueItems.length;
 
@@ -771,9 +811,16 @@ export default function ReviewSession() {
       <Card className="min-h-[280px]">
         <CardHeader>
           <div className="flex items-center justify-between">
-            <Badge variant="secondary" className="uppercase tracking-wide">
-              {question?.type.replace(/_/g, ' ') ?? '…'}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="uppercase tracking-wide">
+                {question?.type.replace(/_/g, ' ') ?? '…'}
+              </Badge>
+              {item?.exam_prep_mode && (
+                <Badge className="bg-amber-100 hover:bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0 h-5 border border-amber-200 flex items-center gap-1">
+                  <Flame className="h-3 w-3" /> Priority
+                </Badge>
+              )}
+            </div>
             {item && (
               <span
                 className="text-xs text-muted-foreground inline-flex items-center gap-1"

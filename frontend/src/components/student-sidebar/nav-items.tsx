@@ -1,4 +1,4 @@
-import { LayoutDashboard, Flag, BookOpen, Megaphone, FileText, SquareTerminal, History, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Flag, BookOpen, Megaphone, FileText, SquareTerminal, Brain, type LucideIcon } from "lucide-react";
 
 export type StudentNavItem = {
   /** Stable identifier — used for keys and conditional logic. */
@@ -23,9 +23,14 @@ export const STUDENT_NAV_ITEMS: StudentNavItem[] = [
   { key: "hp-system", title: "HP System", to: "/student/hp-system/cohorts", icon: SquareTerminal, requires: "hpSystem" },
   { key: "announcements", title: "Announcements", to: "/student/announcements", icon: Megaphone, indicator: "announcements" },
   { key: "submissions", title: "My Submissions", to: "/student/submissions", icon: FileText },
-  // Spaced repetition — review session screen (the main flow).
+  // Spaced repetition — review dashboard is the demo-day landing target.
+  // Lands on /student/review/dashboard (RetentionDashboard) so the student
+  // sees per-course retention health + a "Practice cards" CTA, instead of
+  // being dropped straight into the session card loop. The session itself
+  // (/student/review) is reached from inside the dashboard's CTA, or via
+  // the dashboard's deep-link `?courseId=<id>` search param.
+  // Icon: matches the teacher sidebar's "Review Scheduler" entry, so the
+  // two surfaces feel like the same feature.
   // See backend module: src/modules/spacedRepetition/.
-  // The companion dashboard at /student/review/dashboard is reached from
-  // inside the review session ("Back to dashboard"), not via this sidebar.
-  { key: "review", title: "Review", to: "/student/review", icon: History },
+  { key: "review", title: "Review", to: "/student/review/dashboard", icon: Brain },
 ];
