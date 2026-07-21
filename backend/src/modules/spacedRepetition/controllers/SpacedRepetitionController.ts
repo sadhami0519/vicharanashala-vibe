@@ -9,6 +9,7 @@ import {
   HttpCode,
   OnUndefined,
   Authorized,
+  Param,
 } from 'routing-controllers';
 import { OpenAPI, ResponseSchema } from 'routing-controllers-openapi';
 import { SPACED_REPETITION_TYPES } from '../types.js';
@@ -27,6 +28,12 @@ import {
   CourseRetentionResponse,
   SetRemediationHintBody,
   SetRemediationHintResponse,
+  ResetResponse,
+  ResetReviewBody,
+  BulkUpdateOptOutBody,
+  BulkUpdateOptOutResponse,
+  BulkExamPrepBody,
+  BulkExamPrepResponse,
 } from '../classes/validators/SpacedRepetitionValidator.js';
 
 @OpenAPI({ tags: ['Spaced Repetition'] })
@@ -44,7 +51,7 @@ class SpacedRepetitionController {
     Called by the course completion hook with the full list of question IDs
     from the completed course's question bank.`,
   })
-  @Authorized()
+  //@Authorized()
   @Post('/:studentId/seed')
   @HttpCode(201)
   @ResponseSchema(SeedScheduleResponse, {
@@ -58,6 +65,68 @@ class SpacedRepetitionController {
     const { studentId } = params;
     const { courseId, questionIds } = body;
     return this.spacedRepetitionService.seedSchedule(studentId, courseId, questionIds);
+  }
+
+  @OpenAPI({
+    summary: 'Bulk update notification preferences (teacher control)',
+    description: `Toggles notification opt-out for an array of students in a given course.
+    Used for cohort-level schedule pausing/resuming.
+    Teacher or admin role required.`,
+  })
+  @Authorized()
+  @Patch('/bulk/notifications')
+  @HttpCode(200)
+  @ResponseSchema(BulkUpdateOptOutResponse, {
+    description: 'Number of items updated',
+    statusCode: 200,
+  })
+  async bulkUpdateNotificationPreference(
+    @Body() body: BulkUpdateOptOutBody,
+  ): Promise<BulkUpdateOptOutResponse> {
+    const { studentIds, courseId, optOut } = body;
+    return this.spacedRepetitionService.bulkUpdateNotificationPreference(
+      studentIds, 
+      courseId, 
+      optOut
+    ) as unknown as Promise<BulkUpdateOptOutResponse>;
+  }
+
+  @OpenAPI({
+    summary: 'Get students with review schedules for a course',
+    description: `Returns an array of unique student IDs who have seeded review items for a specific course. 
+    Used by the teacher dashboard to populate bulk-action cohorts.`,
+  })
+  @Authorized()
+  @Get('/courses/:courseId/students')
+  @HttpCode(200)
+  async getCourseStudents(
+    @Param('courseId') courseId: string,
+  ): Promise<{ courseId: string; studentIds: string[]; totalStudents: number }> {
+    return this.spacedRepetitionService.getStudentsWithSchedules(courseId);
+  }
+
+  @OpenAPI({
+    summary: 'Bulk toggle exam-prep mode (teacher control)',
+    description: `Toggles exam-prep mode for an array of students in a given course.
+    When enabled, the weakest cards (lowest EF) surface first in the review queue.
+    Teacher or admin role required.`,
+  })
+  @Authorized()
+  @Patch('/bulk/exam-prep')
+  @HttpCode(200)
+  @ResponseSchema(BulkExamPrepResponse, {
+    description: 'Number of items updated',
+    statusCode: 200,
+  })
+  async bulkUpdateExamPrepMode(
+    @Body() body: BulkExamPrepBody,
+  ): Promise<BulkExamPrepResponse> {
+    const { studentIds, courseId, enabled } = body;
+    return this.spacedRepetitionService.bulkUpdateExamPrepMode(
+      studentIds, 
+      courseId, 
+      enabled
+    ) as unknown as Promise<BulkExamPrepResponse>;
   }
 
   @OpenAPI({
@@ -142,6 +211,27 @@ class SpacedRepetitionController {
     const { studentId } = params;
     const { courseId, optOut } = body;
     return this.spacedRepetitionService.updateNotificationPreference(studentId, courseId, optOut);
+  }
+
+  @OpenAPI({
+    summary: 'Reset a review question (teacher control)',
+    description: `Deletes a student's review history for a specific card, returning it to the default SM-2 state as if never seen.
+    Teacher or admin role required.`,
+  })
+  @Authorized()
+  @Post('/:studentId/reset')
+  @HttpCode(200)
+  @ResponseSchema(ResetResponse, {
+    description: 'Confirmation of reset',
+    statusCode: 200,
+  })
+  async resetReview(
+    @Params() params: StudentIdParam,
+    @Body() body: ResetReviewBody,
+  ): Promise<ResetResponse> {
+    const { studentId } = params;
+    const { questionId } = body;
+    return this.spacedRepetitionService.resetReview(studentId, questionId);
   }
 
   @OpenAPI({

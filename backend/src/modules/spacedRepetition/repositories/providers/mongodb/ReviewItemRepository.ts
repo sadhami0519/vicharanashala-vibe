@@ -157,6 +157,66 @@ class ReviewItemRepository {
     );
     return result.modifiedCount;
   }
+
+/**
+   * Bulk flip the notification_opt_out flag for an array of students within a given course.
+   * Called by the teacher dashboard for cohort-level management.
+   */
+  async updateOptOutBulk(
+    studentIds: string[],
+    courseId: string,
+    optOut: boolean,
+    session?: ClientSession,
+  ): Promise<number> {
+    await this.init();
+    const result = await this.reviewItemCollection.updateMany(
+      { 
+        student_id: { $in: studentIds }, 
+        course_id: courseId 
+      },
+      { $set: { notification_opt_out: optOut } },
+      { session },
+    );
+    return result.modifiedCount;
+  }
+
+  /**
+   * Bulk flip the exam_prep_mode flag for an array of students within a given course.
+   */
+  async updateExamPrepBulk(
+    studentIds: string[],
+    courseId: string,
+    enabled: boolean,
+    session?: ClientSession,
+  ): Promise<number> {
+    await this.init();
+    const result = await this.reviewItemCollection.updateMany(
+      { 
+        student_id: { $in: studentIds }, 
+        course_id: courseId 
+      },
+      { $set: { exam_prep_mode: enabled } },
+      { session },
+    );
+    return result.modifiedCount;
+  }
+
+  /**
+   * Gets a list of unique student IDs who have active review items for a specific course.
+   */
+  async getDistinctStudentsForCourse(
+    courseId: string,
+    session?: ClientSession,
+  ): Promise<string[]> {
+    await this.init();
+    const studentIds = await this.reviewItemCollection.distinct(
+      'student_id',
+      { course_id: courseId },
+      { session }
+    );
+    return studentIds as string[];
+  }
+
 }
 
 export { ReviewItemRepository };

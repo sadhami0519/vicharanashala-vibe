@@ -84,6 +84,57 @@ export class UpdateOptOutBody {
 }
 
 /**
+ * Body for PATCH /bulk/notifications
+ * Sent by a teacher to bulk pause/resume notifications for a cohort of students in a course.
+ */
+export class BulkUpdateOptOutBody {
+  @IsString()
+  @IsNotEmpty()
+  courseId: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  studentIds: string[];
+
+  @IsBoolean()
+  optOut: boolean;
+}
+
+/**
+ * Response for PATCH /bulk/notifications
+ */
+export class BulkUpdateOptOutResponse {
+  updatedCount: number;
+  message: string;
+}
+
+/**
+ * Body for PATCH /bulk/exam-prep
+ */
+export class BulkExamPrepBody {
+  @IsString()
+  @IsNotEmpty()
+  courseId: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  studentIds: string[];
+
+  @IsBoolean()
+  enabled: boolean;
+}
+
+/**
+ * Response for PATCH /bulk/exam-prep
+ */
+export class BulkExamPrepResponse {
+  updatedCount: number;
+  message: string;
+}
+
+/**
  * Body for POST /:studentId/boost
  * Sent by a teacher/admin to force a question to be due immediately
  * for a specific student, optionally resetting the easiness factor.
@@ -108,6 +159,25 @@ export class BoostReviewBody {
   @Min(1.3)
   @Max(3.0)
   targetEF?: number;
+}
+
+/**
+ * Body for POST /:studentId/reset
+ * Sent by a teacher to completely wipe a student's history for a specific card.
+ */
+export class ResetReviewBody {
+  @IsString()
+  @IsNotEmpty()
+  questionId: string;
+}
+
+/**
+ * Response for POST /:studentId/reset
+ */
+export class ResetResponse {
+  reset: boolean;
+  questionId: string;
+  message: string;
 }
 
 // ── Route params ───────────────────────────────────────────────────────────

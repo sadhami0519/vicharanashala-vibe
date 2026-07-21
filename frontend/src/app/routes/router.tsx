@@ -71,6 +71,7 @@ import StudentActivityDetail from '@/app/pages/student/hp-system/activity-detail
 import NotificationsPage from '@/app/pages/shared/NotificationsPage'
 import ReviewSession from '@/app/pages/student/ReviewSession'
 import RetentionDashboard from '@/app/pages/student/RetentionDashboard'
+import ReviewScheduler from "@/app/pages/teacher/ReviewScheduler";
 
 // Root route with error and notFound handling
 const rootRoute = new RootRoute({
@@ -683,6 +684,12 @@ export const selectRoleRoute = new Route({
   component: SelectRolePage
 })
 
+const teacherReviewSchedulerRoute = new Route({
+  getParentRoute: () => teacherLayoutRoute,
+  path: '/spaced-repetition', // This matches the URL you set in AppSidebar
+  component: ReviewScheduler,
+});
+
 // Create the router with the route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -722,6 +729,7 @@ const routeTree = rootRoute.addChildren([
     teacherHpSystemCohortsRoute,
     teacherHpSystemDashboardRoute,
     teacherCreateHpActivityRoute,
+    teacherReviewSchedulerRoute,
     teacherStudentLedgerRoute,
     teacherStudentSubmissionsRoute,
     teacherSubmissionDetailsRoute,

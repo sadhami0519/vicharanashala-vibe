@@ -96,6 +96,7 @@ export interface IReviewItem {
    * The cron job skips sending notifications but still updates state on review.
    */
   notification_opt_out: boolean;
+  exam_prep_mode?: boolean;
 }
 
 /**

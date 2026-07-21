@@ -131,6 +131,7 @@ class SpacedRepetitionService extends BaseService {
         next_review_at: firstReviewAt,
         last_reviewed_at: null,
         notification_opt_out: false,
+        exam_prep_mode: false,
       }));
 
       // Guard against double-seeding: skip if items already exist for this student+course
@@ -199,14 +200,39 @@ class SpacedRepetitionService extends BaseService {
    * Returns all ReviewItems for a student across all courses.
    * Used by the student dashboard to show the full upcoming review schedule.
    */
+/**
+   * Returns all ReviewItems for a student across all courses.
+   * Used by the student dashboard to show the full upcoming review schedule.
+   */
   getSchedule(studentId: string) {
     return this._withTransaction(async session => {
       const items = await this.reviewItemRepo.findByStudent(studentId, session);
+      
+      // Apply Exam-Prep Mode priority sorting
+      items.sort((a, b) => {
+        // 1. Exam Prep items float to the absolute top of the queue
+        if (a.exam_prep_mode && !b.exam_prep_mode) return -1;
+        if (!a.exam_prep_mode && b.exam_prep_mode) return 1;
+        
+        // 2. Within Exam Prep Mode, sort by weakest cards first (lowest EF)
+        if (a.exam_prep_mode && b.exam_prep_mode) {
+          if (a.EF !== b.EF) return a.EF - b.EF;
+        }
+        
+        // 3. Default: Standard chronological sort for normal items
+        return a.next_review_at.getTime() - b.next_review_at.getTime();
+      });
+
       return items;
     });
   }
 
   /**
+   * Returns all ReviewItems for a student within a specific course,
+   * along with a computed retention health summary.
+   * Used by the per-course retention view on the student dashboard.
+   */
+/**
    * Returns all ReviewItems for a student within a specific course,
    * along with a computed retention health summary.
    * Used by the per-course retention view on the student dashboard.
@@ -227,6 +253,18 @@ class SpacedRepetitionService extends BaseService {
           'No review schedule found for this student and course.',
         );
       }
+
+      // Apply Exam-Prep Mode priority sorting for dashboard consistency
+      items.sort((a, b) => {
+        if (a.exam_prep_mode && !b.exam_prep_mode) return -1;
+        if (!a.exam_prep_mode && b.exam_prep_mode) return 1;
+        
+        if (a.exam_prep_mode && b.exam_prep_mode) {
+          if (a.EF !== b.EF) return a.EF - b.EF;
+        }
+        
+        return a.next_review_at.getTime() - b.next_review_at.getTime();
+      });
 
       const now = new Date();
       const sevenDaysFromNow = new Date(now);
@@ -250,6 +288,25 @@ class SpacedRepetitionService extends BaseService {
         dueSoonCount,
         averageEF: Math.round(averageEF * 100) / 100,
         items,
+      };
+    });
+  }
+
+  /**
+   * Returns a list of all student IDs who have an active spaced repetition
+   * schedule for the given course.
+   */
+  getStudentsWithSchedules(courseId: string) {
+    return this._withTransaction(async session => {
+      const studentIds = await this.reviewItemRepo.getDistinctStudentsForCourse(
+        courseId,
+        session
+      );
+      
+      return { 
+        courseId, 
+        studentIds,
+        totalStudents: studentIds.length 
       };
     });
   }
@@ -279,6 +336,54 @@ class SpacedRepetitionService extends BaseService {
       }
 
       return { updatedCount: modifiedCount };
+    });
+  }
+
+  /**
+   * Bulk updates the notification opt-out preference for multiple students
+   * within a given course.
+   * Called by the teacher dashboard for cohort-level management.
+   */
+  bulkUpdateNotificationPreference(
+    studentIds: string[],
+    courseId: string,
+    optOut: boolean,
+  ) {
+    return this._withTransaction(async session => {
+      const modifiedCount = await this.reviewItemRepo.updateOptOutBulk(
+        studentIds,
+        courseId,
+        optOut,
+        session,
+      );
+
+      return { 
+        updatedCount: modifiedCount,
+        message: `Updated notifications for ${modifiedCount} review items.` 
+      };
+    });
+  }
+
+  /**
+   * Bulk updates the exam prep mode for multiple students within a given course.
+   */
+  bulkUpdateExamPrepMode(
+    studentIds: string[],
+    courseId: string,
+    enabled: boolean,
+  ) {
+    return this._withTransaction(async session => {
+      const modifiedCount = await this.reviewItemRepo.updateExamPrepBulk(
+        studentIds,
+        courseId,
+        enabled,
+        session,
+      );
+
+      return { 
+        updatedCount: modifiedCount,
+        message: `${enabled ? 'Enabled' : 'Disabled'} exam-prep mode for ${modifiedCount} review items.` 
+      };
     });
   }
 
@@ -349,6 +454,61 @@ class SpacedRepetitionService extends BaseService {
         EF: updated.EF,
         interval_days: updated.interval_days,
         message,
+      };
+    });
+  }
+
+  /**
+   * Resets a specific question's review history for a student, returning it
+   * to the default SM-2 state as if they had never seen it.
+   */
+  resetReview(
+    studentId: string,
+    questionId: string,
+  ): Promise<{
+    reset: boolean;
+    questionId: string;
+    message: string;
+  }> {
+    return this._withTransaction(async session => {
+      const item = await this.reviewItemRepo.findByStudentAndQuestion(
+        studentId,
+        questionId,
+        session,
+      );
+
+      if (!item) {
+        throw new NotFoundError(
+          'Review item not found for this student and question.',
+        );
+      }
+
+      const now = new Date();
+      const next_review_at = new Date(now);
+      next_review_at.setDate(next_review_at.getDate() + DEFAULT_SM2_STATE.interval_days);
+
+      const updates: Partial<IReviewItem> = {
+        n: DEFAULT_SM2_STATE.n,
+        EF: DEFAULT_SM2_STATE.EF,
+        interval_days: DEFAULT_SM2_STATE.interval_days,
+        next_review_at,
+        last_reviewed_at: null, // Clear the review timestamp
+      };
+
+      const updated = await this.reviewItemRepo.update(
+        item._id.toString(),
+        updates,
+        session,
+      );
+
+      if (!updated) {
+        throw new InternalServerError('Failed to reset review item.');
+      }
+
+      return {
+        reset: true,
+        questionId,
+        message: 'Card history successfully reset to default state.',
       };
     });
   }

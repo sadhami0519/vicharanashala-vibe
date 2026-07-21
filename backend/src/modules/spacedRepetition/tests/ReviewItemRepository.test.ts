@@ -60,6 +60,7 @@ function makeItem(overrides: Partial<Omit<IReviewItem, '_id'>> = {}): Omit<IRevi
     next_review_at: new Date(),
     last_reviewed_at: null,
     notification_opt_out: false,
+    exam_prep_mode: false,
     ...overrides,
   };
 }

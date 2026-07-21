@@ -6,6 +6,12 @@ import {
   submitReview,
   updateNotificationPreference,
   seedSchedule,
+  boostReview,
+  setRemediationHint,
+  bulkUpdateNotificationPreference,
+  bulkUpdateExamPrepMode,
+  getCourseStudents,
+  resetReview,
 } from '@/lib/spaced-repetition-api';
 
 // ── Query keys ─────────────────────────────────────────────────────────────
@@ -15,6 +21,8 @@ export const spacedRepetitionKeys = {
     ['spaced-repetition', 'schedule', studentId] as const,
   courseRetention: (studentId: string, courseId: string) =>
     ['spaced-repetition', 'retention', studentId, courseId] as const,
+  courseStudents: (courseId: string) =>
+    ['spaced-repetition', 'course-students', courseId] as const,
 };
 
 // ── Queries ────────────────────────────────────────────────────────────────
@@ -83,5 +91,82 @@ export function useSeedSchedule(studentId: string) {
       courseId: string;
       questionIds: string[];
     }) => seedSchedule(studentId, courseId, questionIds),
+  });
+}
+
+// ── Card-Specific Mutations (Updated for Multi-Student Support) ────────────
+
+export function useBoostReview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ 
+      studentId, 
+      questionId, 
+      targetEF 
+    }: { 
+      studentId: string; 
+      questionId: string; 
+      targetEF?: number 
+    }) => boostReview(studentId, questionId, targetEF),
+    onSuccess: (_, variables) => {
+      // Use variables.studentId to invalidate the correct cache
+      queryClient.invalidateQueries({ 
+        queryKey: spacedRepetitionKeys.schedule(variables.studentId) 
+      });
+    },
+  });
+}
+
+export function useSetRemediationHint() {
+  return useMutation({
+    mutationFn: ({ 
+      studentId, 
+      questionId, 
+      hint 
+    }: { 
+      studentId: string; 
+      questionId: string; 
+      hint: string | null 
+    }) => setRemediationHint(studentId, questionId, hint),
+  });
+}
+
+export function useResetReview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ 
+      studentId, 
+      questionId 
+    }: { 
+      studentId: string; 
+      questionId: string 
+    }) => resetReview(studentId, questionId),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ 
+        queryKey: spacedRepetitionKeys.schedule(variables.studentId) 
+      });
+    },
+  });
+}
+
+export function useBulkUpdateNotifications() {
+  return useMutation({
+    mutationFn: ({ courseId, studentIds, optOut }: { courseId: string; studentIds: string[]; optOut: boolean }) =>
+      bulkUpdateNotificationPreference(courseId, studentIds, optOut),
+  });
+}
+
+export function useBulkUpdateExamPrep() {
+  return useMutation({
+    mutationFn: ({ courseId, studentIds, enabled }: { courseId: string; studentIds: string[]; enabled: boolean }) =>
+      bulkUpdateExamPrepMode(courseId, studentIds, enabled),
+  });
+}
+
+export function useGetCourseStudents(courseId: string) {
+  return useQuery({
+    queryKey: spacedRepetitionKeys.courseStudents(courseId),
+    queryFn: () => getCourseStudents(courseId),
+    enabled: !!courseId && courseId.length > 5, // Only run if a plausible courseId is typed
   });
 }

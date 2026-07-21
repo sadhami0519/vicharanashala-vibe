@@ -27,6 +27,7 @@ import HpSystemDashboard from "../pages/teacher/hp-system/CohortDetails";
 import StudentLedgerPage from "../pages/teacher/hp-system/student-ledger";
 import StudentSubmissionsPage from "../pages/teacher/hp-system/student-submissions";
 import SubmissionDetailsPage from "../pages/teacher/hp-system/submission-details";
+import ReviewScheduler from "@/app/pages/teacher/ReviewScheduler";
 const teacherRoutes: RouteObject = {
   path: "/teacher",
   element: <TeacherLayout />,
@@ -35,6 +36,7 @@ const teacherRoutes: RouteObject = {
     //   path: "dashboard",
     //   element: <Dashboard />,
     // },
+    {path: "spaced-repetition",element: <ReviewScheduler />,},
     {path:"ejection-policies",element: <EjectionPoliciesPage />,},
     {
       path: "profile",

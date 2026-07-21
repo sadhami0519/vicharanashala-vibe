@@ -14,6 +14,7 @@ import {
   Settings2,
   Shield,
   SquareTerminal,
+  Brain,
 } from "lucide-react"
 
 import { NavMain } from "./nav-main"
@@ -66,6 +67,11 @@ export function AppSidebar() {
         title: "HP System",
         url: "/teacher/hp-system",
         icon: SquareTerminal,
+      },
+      {
+        title: "Review Scheduler",
+        url: "/teacher/spaced-repetition", 
+        icon: Brain,
       },
       // {
       //   title: "Notifications",
