@@ -314,6 +314,13 @@ function TeacherSection() {
           selected student at once &mdash; useful for announcing a review
           break to the whole class.
         </li>
+        <li>
+          <span className="font-medium">Disable SR for a student</span> turns
+          off spaced-repetition entirely for that account &mdash; reviews
+          stop accumulating and reminders stop firing. The student still sees
+          the navigation entry; landing on it shows a message that their
+          teacher has paused it. Re-enable at any time.
+        </li>
       </ul>
     </div>
   );

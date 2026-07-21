@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import { appConfig } from '#root/config/app.js';
 import { getContainer } from '#root/bootstrap/loadModules.js';
 import { SPACED_REPETITION_TYPES } from '../types.js';
-import { ReviewItemRepository } from '#spacedRepetition/repositories/index.js';
+import { ReviewItemRepository, StudentSRStatusRepository } from '#spacedRepetition/repositories/index.js';
 import { IReviewItem } from '../interfaces/IReviewItem.js';
 import { NOTIFICATIONS_TYPES } from '../../notifications/types.js';
 import { NotificationService } from '../../notifications/services/NotificationService.js';
@@ -58,10 +58,26 @@ export function scheduleReviewNotificationJob(): void {
         const now = new Date();
         const allDueItems = await reviewItemRepo.findDueItems(now);
 
-        // Filter out students who have opted out of notifications
-        const notifiableItems = allDueItems.filter(
-          item => !item.notification_opt_out,
+        // Knob 6 (Phase C, 2026-07-21): drop items whose student has SR
+        // disabled entirely. Bulk-read the user flags in one round trip
+        // to avoid an N+1 lookup per due item.
+        const studentSRStatusRepo = container.get<StudentSRStatusRepository>(
+          SPACED_REPETITION_TYPES.StudentSRStatusRepo,
         );
+        const distinctStudentIds = [
+          ...new Set(allDueItems.map(i => i.student_id)),
+        ];
+        const disabledMap = await studentSRStatusRepo.getStatusForMany(
+          distinctStudentIds,
+        );
+
+        // Filter out students who have opted out of notifications OR have
+        // SR disabled entirely by a teacher.
+        const notifiableItems = allDueItems.filter(item => {
+          if (item.notification_opt_out) return false;
+          if (disabledMap.get(item.student_id) === true) return false;
+          return true;
+        });
 
         if (!notifiableItems.length) {
           console.log('✅ No review notifications to send.');

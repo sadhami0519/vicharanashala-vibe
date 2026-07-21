@@ -34,6 +34,11 @@ import {
   BulkUpdateOptOutResponse,
   BulkExamPrepBody,
   BulkExamPrepResponse,
+  SetStudentSRDisabledBody,
+  SetStudentSRDisabledResponse,
+  StudentSRStatusResponse,
+  BulkSetStudentSRDisabledBody,
+  BulkSetStudentSRDisabledResponse,
 } from '../classes/validators/SpacedRepetitionValidator.js';
 
 @OpenAPI({ tags: ['Spaced Repetition'] })
@@ -282,6 +287,86 @@ class SpacedRepetitionController {
       questionId,
       hint,
     );
+  }
+
+  // ── SR-disabled endpoints (Knob 6, Phase C, 2026-07-21) ──────────────
+
+  @OpenAPI({
+    summary: 'Get SR-enabled status for a student',
+    description: `Returns whether spaced repetition is currently enabled for the student.
+    Used by the student dashboard to choose between the 'no reviews yet'
+    and 'disabled by teacher' empty-state copy.`,
+  })
+  @Authorized()
+  @Get('/students/:studentId/status')
+  @HttpCode(200)
+  @ResponseSchema(StudentSRStatusResponse, {
+    description: 'Whether SR is enabled for this student',
+    statusCode: 200,
+  })
+  async getStudentSRStatus(
+    @Param('studentId') studentId: string,
+  ): Promise<StudentSRStatusResponse> {
+    const sr_disabled =
+      await this.spacedRepetitionService.getStudentSRStatus(studentId);
+    return { studentId, sr_disabled };
+  }
+
+  @OpenAPI({
+    summary: 'Enable or disable SR for a student (teacher control)',
+    description: `Flips the SR-disabled flag for one student. When set to true,
+    the student's review schedule stops accumulating and reminders stop firing.
+    The student dashboard shows a 'disabled by teacher' empty state.
+    Re-enabling (sr_disabled: false) does NOT auto-seed — it just allows the
+    next course completion to seed normally. Teacher or admin role required.`,
+  })
+  @Authorized()
+  @Patch('/students/:studentId/sr-disabled')
+  @HttpCode(200)
+  @ResponseSchema(SetStudentSRDisabledResponse, {
+    description: 'New SR-enabled status',
+    statusCode: 200,
+  })
+  async setStudentSRDisabled(
+    @Param('studentId') studentId: string,
+    @Body() body: SetStudentSRDisabledBody,
+  ): Promise<SetStudentSRDisabledResponse> {
+    const { sr_disabled } = body;
+    const result = await this.spacedRepetitionService.setStudentSRStatus(
+      studentId,
+      sr_disabled,
+    );
+    return {
+      studentId: result.studentId,
+      sr_disabled: result.sr_disabled,
+      message: sr_disabled
+        ? `Spaced repetition disabled for ${studentId}.`
+        : `Spaced repetition re-enabled for ${studentId}.`,
+    };
+  }
+
+  @OpenAPI({
+    summary: 'Bulk enable or disable SR for a cohort (teacher control)',
+    description: `Flips the SR-disabled flag for an array of students in one call.
+    Used by the teacher dashboard to disable SR across a whole class.
+    Teacher or admin role required.`,
+  })
+  @Authorized()
+  @Patch('/bulk/sr-disabled')
+  @HttpCode(200)
+  @ResponseSchema(BulkSetStudentSRDisabledResponse, {
+    description: 'Number of students whose flag was updated',
+    statusCode: 200,
+  })
+  async bulkSetStudentSRDisabled(
+    @Body() body: BulkSetStudentSRDisabledBody,
+  ): Promise<BulkSetStudentSRDisabledResponse> {
+    const { studentIds, sr_disabled } = body;
+    const result = await this.spacedRepetitionService.bulkSetStudentSRStatus(
+      studentIds,
+      sr_disabled,
+    );
+    return result;
   }
 }
 

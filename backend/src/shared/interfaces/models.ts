@@ -27,6 +27,15 @@ export interface IUser {
   profileImage?: string;
   faceEmbedding?: number[];
   roles: 'admin' | 'user';
+
+  /**
+   * Teacher-controlled flag that disables spaced repetition entirely for
+   * this student. When true, the SR module's endpoints return empty / 403
+   * for this student, the cron job skips them, and the student dashboard
+   * shows a 'disabled by teacher' empty state.
+   * Added 2026-07-21 for Phase C (Knob 6: Disable SR for a student).
+   */
+  sr_disabled?: boolean;
 }
 
 export type Versions = {

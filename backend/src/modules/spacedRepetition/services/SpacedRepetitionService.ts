@@ -1,10 +1,10 @@
 import { injectable, inject } from 'inversify';
-import { NotFoundError, InternalServerError } from 'routing-controllers';
+import { NotFoundError, InternalServerError, ForbiddenError } from 'routing-controllers';
 import { SPACED_REPETITION_TYPES } from '../types.js';
 import { BaseService } from '#root/shared/classes/BaseService.js';
 import { MongoDatabase } from '#shared/database/providers/mongo/MongoDatabase.js';
 import { GLOBAL_TYPES } from '#root/types.js';
-import { ReviewItemRepository } from '#spacedRepetition/repositories/index.js';
+import { ReviewItemRepository, StudentSRStatusRepository } from '#spacedRepetition/repositories/index.js';
 import {
   IReviewItem,
   ISM2State,
@@ -39,8 +39,81 @@ class SpacedRepetitionService extends BaseService {
 
     @inject(SPACED_REPETITION_TYPES.ReviewItemRepo)
     private readonly reviewItemRepo: ReviewItemRepository,
+
+    @inject(SPACED_REPETITION_TYPES.StudentSRStatusRepo)
+    private readonly studentSRStatusRepo: StudentSRStatusRepository,
   ) {
     super(database);
+  }
+
+  // ── SR-disabled guards (Knob 6, Phase C, 2026-07-21) ───────────────────
+
+  /**
+   * Throws ForbiddenError if the student has SR disabled.
+   * Used to short-circuit any write path (seed, review) when SR is off.
+   */
+  private async _assertSREnabled(studentId: string): Promise<void> {
+    const disabled = await this.studentSRStatusRepo.getStatus(studentId);
+    if (disabled) {
+      throw new ForbiddenError(
+        'Spaced repetition is disabled for this student.',
+      );
+    }
+  }
+
+  /**
+   * Returns the SR-disabled flag for one student.
+   * Used by the frontend to choose between the empty-state copy
+   * ("no reviews yet") and the disabled copy ("disabled by teacher").
+   */
+  async getStudentSRStatus(studentId: string): Promise<boolean> {
+    return this.studentSRStatusRepo.getStatus(studentId);
+  }
+
+  /**
+   * Sets the SR-disabled flag for one student.
+   * Returns the new flag value.
+   */
+  async setStudentSRStatus(
+    studentId: string,
+    disabled: boolean,
+  ): Promise<{ studentId: string; sr_disabled: boolean }> {
+    return this._withTransaction(async session => {
+      const matched = await this.studentSRStatusRepo.setStatus(
+        studentId,
+        disabled,
+        session,
+      );
+      if (!matched) {
+        throw new NotFoundError(
+          `No user found with firebaseUID '${studentId}'.`,
+        );
+      }
+      return { studentId, sr_disabled: disabled };
+    });
+  }
+
+  /**
+   * Bulk-set the SR-disabled flag for many students.
+   * Returns the number of users whose flag was actually changed.
+   */
+  async bulkSetStudentSRStatus(
+    studentIds: string[],
+    disabled: boolean,
+  ): Promise<{ updatedCount: number; message: string }> {
+    return this._withTransaction(async session => {
+      const updatedCount = await this.studentSRStatusRepo.setStatusForMany(
+        studentIds,
+        disabled,
+        session,
+      );
+      return {
+        updatedCount,
+        message: disabled
+          ? `Disabled SR for ${updatedCount} student(s).`
+          : `Re-enabled SR for ${updatedCount} student(s).`,
+      };
+    });
   }
 
   // ── SM-2 algorithm (private, pure — no DB calls) ─────────────────────────
@@ -119,6 +192,13 @@ class SpacedRepetitionService extends BaseService {
         );
       }
 
+      // Knob 6: refuse to seed if the student has SR disabled.
+      // The teacher must re-enable first. This is a teacher-coach lever, not
+      // an automatic gate — the auto-seeding course-completion hook will
+      // silently no-op (caught upstream), and explicit seeds from the
+      // teacher UI will surface a clear 403.
+      await this._assertSREnabled(studentId);
+
       const now = new Date();
       const firstReviewAt = new Date(now);
       firstReviewAt.setDate(firstReviewAt.getDate() + DEFAULT_SM2_STATE.interval_days);
@@ -168,6 +248,11 @@ class SpacedRepetitionService extends BaseService {
     quality: RecallQuality,
   ) {
     return this._withTransaction(async session => {
+      // Knob 6: refuse to accept reviews if SR is disabled.
+      // The student-facing empty state already gates the review session,
+      // but this is a belt-and-braces guard for direct API calls.
+      await this._assertSREnabled(studentId);
+
       const item = await this.reviewItemRepo.findByStudentAndQuestion(
         studentId,
         questionId,

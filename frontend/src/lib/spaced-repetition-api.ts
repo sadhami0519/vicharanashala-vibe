@@ -561,3 +561,125 @@ export async function resetReview(
     body: JSON.stringify({ questionId }),
   });
 }
+
+// ── SR-disabled (Knob 6, Phase C, 2026-07-21) ──────────────────────────
+
+/**
+ * Per-student SR-disabled flag storage.
+ *
+ * Lives in its own localStorage key because it is denormalised onto the
+ * `users` collection on the backend, not onto `review_items`. Keeping it
+ * separate from `vibe_sr_mock_v2` means a teacher disabling SR for a
+ * student doesn't dirty the review-items store (and vice versa).
+ */
+const SR_DISABLED_STORAGE_KEY = 'vibe_sr_disabled_mock_v1';
+
+/** Read the persisted SR-disabled set. */
+function loadSRDisabledState(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SR_DISABLED_STORAGE_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((s): s is string => typeof s === 'string'));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Persist the SR-disabled set. */
+function persistSRDisabledState(set: Set<string>): void {
+  try {
+    localStorage.setItem(SR_DISABLED_STORAGE_KEY, JSON.stringify([...set]));
+  } catch {
+    // localStorage may be unavailable (e.g. SSR); fail-open
+  }
+}
+
+/**
+ * Module-level mutable set, hydrated from localStorage on first import.
+ * Mirrors the `users.sr_disabled` field on the backend.
+ */
+const MOCK_SR_DISABLED: Set<string> = loadSRDisabledState();
+
+/**
+ * Check whether SR is disabled for a student.
+ * GET /api/spaced-repetition/students/:studentId/status
+ *
+ * In mock mode, reads from the in-memory set hydrated from localStorage.
+ */
+export async function getStudentSRStatus(
+  studentId: string,
+): Promise<{ studentId: string; sr_disabled: boolean }> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 80));
+    return { studentId, sr_disabled: MOCK_SR_DISABLED.has(studentId) };
+  }
+  return apiFetch(
+    `/api/spaced-repetition/students/${studentId}/status`,
+  );
+}
+
+/**
+ * Enable or disable SR for a student.
+ * PATCH /api/spaced-repetition/students/:studentId/sr-disabled
+ */
+export async function setStudentSRDisabled(
+  studentId: string,
+  sr_disabled: boolean,
+): Promise<{ studentId: string; sr_disabled: boolean; message: string }> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 200));
+    if (sr_disabled) {
+      MOCK_SR_DISABLED.add(studentId);
+    } else {
+      MOCK_SR_DISABLED.delete(studentId);
+    }
+    persistSRDisabledState(MOCK_SR_DISABLED);
+    return {
+      studentId,
+      sr_disabled,
+      message: sr_disabled
+        ? `Mock: SR disabled for ${studentId}.`
+        : `Mock: SR re-enabled for ${studentId}.`,
+    };
+  }
+  return apiFetch(
+    `/api/spaced-repetition/students/${studentId}/sr-disabled`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ sr_disabled }),
+    },
+  );
+}
+
+/**
+ * Bulk enable or disable SR for an array of students.
+ * PATCH /api/spaced-repetition/bulk/sr-disabled
+ */
+export async function bulkSetStudentSRDisabled(
+  studentIds: string[],
+  sr_disabled: boolean,
+): Promise<{ updatedCount: number; message: string }> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 250));
+    for (const id of studentIds) {
+      if (sr_disabled) {
+        MOCK_SR_DISABLED.add(id);
+      } else {
+        MOCK_SR_DISABLED.delete(id);
+      }
+    }
+    persistSRDisabledState(MOCK_SR_DISABLED);
+    return {
+      updatedCount: studentIds.length,
+      message: sr_disabled
+        ? `Mock: SR disabled for ${studentIds.length} student(s).`
+        : `Mock: SR re-enabled for ${studentIds.length} student(s).`,
+    };
+  }
+  return apiFetch(`/api/spaced-repetition/bulk/sr-disabled`, {
+    method: 'PATCH',
+    body: JSON.stringify({ studentIds, sr_disabled }),
+  });
+}

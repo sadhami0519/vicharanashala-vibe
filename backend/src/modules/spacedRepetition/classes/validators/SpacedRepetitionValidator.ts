@@ -40,6 +40,60 @@ export class SetRemediationHintResponse {
   message: string;
 }
 
+// ── SR-disabled DTOs (Knob 6) ───────────────────────────────────────────────
+
+/**
+ * Body for PATCH /students/:studentId/sr-disabled
+ * Sent by a teacher to enable or disable SR for a specific student.
+ * When true, the student's reviews stop accumulating and reminders stop firing.
+ */
+export class SetStudentSRDisabledBody {
+  @IsBoolean()
+  sr_disabled: boolean;
+}
+
+/**
+ * Response for PATCH /students/:studentId/sr-disabled
+ */
+export class SetStudentSRDisabledResponse {
+  studentId: string;
+  sr_disabled: boolean;
+  message: string;
+}
+
+/**
+ * Response for GET /students/:studentId/status
+ * Lightweight read used by the student dashboard to choose empty-state copy.
+ */
+export class StudentSRStatusResponse {
+  studentId: string;
+  sr_disabled: boolean;
+}
+
+/**
+ * Body for PATCH /bulk/sr-disabled
+ * Sent by a teacher to bulk enable/disable SR for a cohort.
+ * studentIds is optional — if omitted, applies to every student with a
+ * review schedule in the given course.
+ */
+export class BulkSetStudentSRDisabledBody {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  studentIds: string[];
+
+  @IsBoolean()
+  sr_disabled: boolean;
+}
+
+/**
+ * Response for PATCH /bulk/sr-disabled
+ */
+export class BulkSetStudentSRDisabledResponse {
+  updatedCount: number;
+  message: string;
+}
+
 // ── Request bodies ─────────────────────────────────────────────────────────
 
 /**

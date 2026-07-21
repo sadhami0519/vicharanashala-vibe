@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Loader2, Zap, PauseCircle, PlayCircle, GraduationCap, Users, BookOpen, BrainCircuit, MessageSquareText, RotateCcw, CheckSquare, Square } from "lucide-react";
+import { Loader2, Zap, PauseCircle, PlayCircle, GraduationCap, Users, BookOpen, BrainCircuit, MessageSquareText, RotateCcw, CheckSquare, Square, Ban, Power } from "lucide-react";
 import { toast } from "sonner";
 import { 
   useBoostReview, 
@@ -11,7 +11,8 @@ import {
   useBulkUpdateNotifications, 
   useBulkUpdateExamPrep,
   useGetCourseStudents,
-  useResetReview
+  useResetReview,
+  useBulkSetStudentSRDisabled
 } from "@/hooks/spaced-repetition-hooks";
 import { resetMockState } from "@/lib/spaced-repetition-api";
 import { InfoPopover } from "@/components/InfoPopover";
@@ -35,6 +36,7 @@ export default function ReviewScheduler() {
   const resetMutation = useResetReview("");
   const bulkNotifyMutation = useBulkUpdateNotifications();
   const bulkExamPrepMutation = useBulkUpdateExamPrep();
+  const bulkSRDisabledMutation = useBulkSetStudentSRDisabled();
 
   // Fetch students who have schedules for this course
   const { data: studentsData, isLoading: isLoadingStudents } = useGetCourseStudents(courseId);
@@ -91,6 +93,18 @@ export default function ReviewScheduler() {
     bulkExamPrepMutation.mutate({ courseId, studentIds: selectedStudents, enabled }, {
       onSuccess: (data) => toast.success(`${enabled ? 'Enabled' : 'Disabled'} Exam-Prep mode for ${data.updatedCount} students`),
       onError: (err) => toast.error(err.message)
+    });
+  };
+
+  const handleBulkSRDisabled = (sr_disabled: boolean) => {
+    if (selectedStudents.length === 0) return toast.error("Please select at least one student");
+    bulkSRDisabledMutation.mutate({ studentIds: selectedStudents, sr_disabled }, {
+      onSuccess: (data) => toast.success(
+        sr_disabled
+          ? `Disabled SR for ${data.updatedCount} student(s)`
+          : `Re-enabled SR for ${data.updatedCount} student(s)`,
+      ),
+      onError: (err) => toast.error(err.message),
     });
   };
 
@@ -193,6 +207,22 @@ export default function ReviewScheduler() {
                 </Button>
                 <Button variant="outline" onClick={() => handleBulkExamPrep(false)} className="h-11 justify-start">
                   Disable Exam-Prep
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleBulkSRDisabled(true)}
+                  className="h-11 justify-start border-destructive/40 text-destructive hover:bg-destructive/5 hover:text-destructive"
+                  title="Turn off SR entirely for the selected students. Reviews stop accumulating and reminders stop firing."
+                >
+                  <Ban className="mr-2 h-4 w-4" /> Disable SR
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleBulkSRDisabled(false)}
+                  className="h-11 justify-start"
+                  title="Re-enable SR for the selected students. Their next course completion will seed a new schedule."
+                >
+                  <Power className="mr-2 h-4 w-4 text-emerald-500" /> Re-enable SR
                 </Button>
               </CardContent>
             </Card>

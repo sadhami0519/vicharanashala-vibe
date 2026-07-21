@@ -8,6 +8,7 @@
 const TYPES = {
   // Repository
   ReviewItemRepo: Symbol.for('ReviewItemRepo'),
+  StudentSRStatusRepo: Symbol.for('StudentSRStatusRepo'),
 
   // Service
   SpacedRepetitionService: Symbol.for('SpacedRepetitionService'),

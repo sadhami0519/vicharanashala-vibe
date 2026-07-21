@@ -23,6 +23,7 @@ import {
   BookOpen,
   TrendingUp,
   Flame,
+  Ban, // Added for SR-disabled empty state (Knob 6, Phase C, 2026-07-21)
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
 import { Link, useSearch } from '@tanstack/react-router';
@@ -30,6 +31,7 @@ import {
   useGetSchedule,
   useGetCourseRetention,
   useSubmitReview,
+  useGetStudentSRStatus,
 } from '@/hooks/spaced-repetition-hooks';
 import {
   ReviewItem,
@@ -370,6 +372,12 @@ export default function ReviewSession() {
     refetch: refetchSchedule,
   } = useGetSchedule(studentId);
 
+  // Knob 6: detect whether this student has SR turned off by a teacher.
+  // When true, the review session shows a distinct empty state — no
+  // cards to walk, no call to action.
+  const { data: srStatus } = useGetStudentSRStatus(studentId);
+  const srDisabled = srStatus?.sr_disabled === true;
+
   const submitReview = useSubmitReview(studentId);
 
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -601,6 +609,31 @@ export default function ReviewSession() {
     const hasNoScheduleAtAll = !schedule || schedule.length === 0;
 
     if (hasNoScheduleAtAll) {
+      // Knob 6: when SR has been disabled by a teacher for this student,
+      // surface a distinct empty state that names the cause and offers no
+      // CTA. Precedes the brand-new-student branch so the right message
+      // shows even when both conditions hold.
+      if (srDisabled) {
+        return (
+          <Card className="max-w-xl mx-auto mt-8 border-2 border-dashed border-amber-300/60 bg-gradient-to-br from-amber-50/40 via-background to-background">
+            <CardContent className="flex flex-col items-center gap-4 py-12 px-6 text-center">
+              <div className="rounded-full bg-amber-100 p-4 ring-1 ring-amber-300/40 dark:bg-amber-950/40 dark:ring-amber-700/40">
+                <Ban className="h-8 w-8 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+              </div>
+              <div className="space-y-1.5 max-w-sm">
+                <h3 className="text-base font-semibold tracking-tight">
+                  Spaced repetition is paused for your account
+                </h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Your teacher has disabled this for you. If you’d like it
+                  re-enabled, please reach out to them directly.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      }
+
       // Brand-new student: mirror the dashboard's empty state so the two
       // pages render consistently. Same Card styling, icon, copy, and CTA.
       return (
