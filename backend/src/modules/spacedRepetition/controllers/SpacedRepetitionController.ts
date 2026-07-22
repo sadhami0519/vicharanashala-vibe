@@ -142,7 +142,12 @@ class SpacedRepetitionController {
     summary: 'Submit a review response',
     description: `Processes a student's recall quality response for a single question.
     Runs the SM-2 algorithm and persists the updated state and next review date.
-    Returns the updated ReviewItem.`,
+    For MCQ question types, the optional \`selectedOptionIndices\` array
+    lets the service compute whether the student's pick matched the
+    canonical correct option(s); the result is returned in
+    \`isCorrect\`. The correct option indices themselves are NEVER
+    returned — only the boolean — so the review endpoint can never be
+    used as an answer-key oracle.`,
   })
   @Authorized()
   @Post('/:studentId/review')
@@ -156,8 +161,14 @@ class SpacedRepetitionController {
     @Body() body: SubmitReviewBody,
   ): Promise<ReviewItemResponse> {
     const { studentId } = params;
-    const { questionId, quality } = body;
-    return this.spacedRepetitionService.submitReview(studentId, questionId, quality) as unknown as Promise<ReviewItemResponse>;
+    const { questionId, quality, selectedOptionIndices } = body;
+    const result = await this.spacedRepetitionService.submitReview(
+      studentId,
+      questionId,
+      quality,
+      selectedOptionIndices,
+    );
+    return result.item as unknown as ReviewItemResponse;
   }
 
   @OpenAPI({

@@ -254,12 +254,26 @@ class SpacedRepetitionService extends BaseService {
    * Fetches the ReviewItem, applies SM-2, and persists the updated state.
    *
    * Called by the controller when a student submits a review response.
+   *
+   * For MCQ question types (SELECT_ONE_IN_LOT / SELECT_MANY_IN_LOT),
+   * the caller may pass `selectedOptionIndices` — the indices into the
+   * review-mode `options[]` array the student saw. When provided, this
+   * method also computes whether the student answered correctly by
+   * comparing those indices against the question's canonical
+   * solution. The result is returned in `isCorrect` so the frontend
+   * can light up the picked option(s) green (correct) or red (wrong).
+   *
+   * The correct option indices are NEVER returned to the frontend —
+   * only the boolean `isCorrect`. This preserves the review-mode
+   * security boundary where students shouldn't be able to retrieve
+   * answer keys by querying the review endpoint.
    */
   submitReview(
     studentId: string,
     questionId: string,
     quality: RecallQuality,
-  ) {
+    selectedOptionIndices?: number[],
+  ): Promise<{ item: any; isCorrect?: boolean }> {
     return this._withTransaction(async session => {
       // Knob 6: refuse to accept reviews if SR is disabled.
       // The student-facing empty state already gates the review session,
@@ -290,8 +304,107 @@ class SpacedRepetitionService extends BaseService {
         throw new InternalServerError('Failed to update review item after SM-2 calculation.');
       }
 
-      return updated;
+      // Compute correctness for MCQ question types. Fail-open: if the
+      // question can't be loaded for any reason, we still return the
+      // updated item (SM-2 happened) but omit `isCorrect` so the
+      // frontend falls back to the existing "rate-only" UX.
+      let isCorrect: boolean | undefined;
+      if (selectedOptionIndices && selectedOptionIndices.length > 0) {
+        try {
+          isCorrect = await this._evaluateMCQCorrectness(
+            questionId,
+            selectedOptionIndices,
+          );
+        } catch (err) {
+          // Fail-open: log but don't propagate, so SM-2 progress is
+          // never blocked by a transient question-lookup failure.
+          console.warn(
+            '[SpacedRepetitionService.submitReview] MCQ correctness check failed;',
+            'omitting isCorrect from response.',
+            err,
+          );
+        }
+      }
+
+      return { item: updated, isCorrect };
     });
+  }
+
+  /**
+   * Compares a student's selected option indices against the canonical
+   * correct option(s) for an MCQ question. Returns true if the selection
+   * exactly matches the correct set; false otherwise.
+   *
+   * Mirrors the display-order logic used by `toReviewQuestionResponse`
+   * in `backend/src/modules/quizzes/classes/transformers/Question.ts`:
+   *   - SELECT_ONE_IN_LOT: incorrect lot items first, then the
+   *     single correct lot item at the end.
+   *   - SELECT_MANY_IN_LOT: incorrect lot items first, then all
+   *     correct lot items.
+   *
+   * The correctness comparison is index-based because that's what
+   * the frontend actually sees and sends. Order_THE_LOTS, NUMERIC_ANSWER,
+   * and DESCRIPTIVE questions don't have clickable options so they're
+   * not supported here; the caller omits `selectedOptionIndices` for
+   * those types.
+   *
+   * Throws if the question doesn't exist or isn't a supported MCQ type
+   * — caller is expected to fail-open on caught errors.
+   */
+  private async _evaluateMCQCorrectness(
+    questionId: string,
+    selectedIndices: number[],
+  ): Promise<boolean> {
+    const question = await this.questionRepo.getById(questionId);
+    if (!question) {
+      throw new Error(`Question ${questionId} not found`);
+    }
+
+    const questionType = (question as any).type ?? (question as any).questionType;
+    const MAX_OPTIONS = 8; // Mirrors toReviewQuestionResponse's slice(0, 8)
+
+    if (questionType === 'SELECT_ONE_IN_LOT') {
+      const sol = question as any;
+      const allItems = [...(sol.incorrectLotItems ?? [])];
+      if (sol.correctLotItem) {
+        allItems.push(sol.correctLotItem);
+      }
+      const correctIdx = allItems
+        .slice(0, MAX_OPTIONS)
+        .findIndex(
+          (it: any) => it._id?.toString() === sol.solution?.lotItemId,
+        );
+      return selectedIndices.length === 1 && selectedIndices[0] === correctIdx;
+    }
+
+    if (questionType === 'SELECT_MANY_IN_LOT') {
+      const sml = question as any;
+      const allItems = [
+        ...(sml.incorrectLotItems ?? []),
+        ...(sml.correctLotItems ?? []),
+      ];
+      const correctLotIds = new Set(
+        (sml.solution?.lotItemIds ?? []).map((id: any) => id?.toString()),
+      );
+      const correctIndices = allItems
+        .slice(0, MAX_OPTIONS)
+        .map((it: any, idx: number) =>
+          correctLotIds.has(it._id?.toString()) ? idx : -1,
+        )
+        .filter((idx: number) => idx >= 0);
+      const correctSet = new Set(correctIndices);
+      const selectedSet = new Set(selectedIndices);
+      if (correctSet.size !== selectedSet.size) return false;
+      for (const idx of correctSet) {
+        if (!selectedSet.has(idx)) return false;
+      }
+      return true;
+    }
+
+    // Non-MCQ question type — not supported; fail-open in caller.
+    throw new Error(
+      `MCQ correctness check not supported for question type: ${questionType}`,
+    );
   }
 
   /**

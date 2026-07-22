@@ -58,6 +58,17 @@ interface ReviewQuestionResponse {
   options: string[];
   quizTitle: string | null;
   quizId: string | null;
+  /**
+   * Knob 8 (Phase D prep, 2026-07-21): indices into `options[]` that
+   * represent the canonical correct answer. Used by the frontend to
+   * self-check in mock mode (the backend uses the question's solution
+   * field directly). Omitted for numeric/descriptive question types.
+   *
+   * Lives in this file (not shared/spaced-repetition.types.ts) because
+   * it's mock-only data; the production code path doesn't expose
+   * correctIndices to the frontend at all (security boundary).
+   */
+  correctIndices?: number[];
 }
 
 // Demo content (2026-07-21): CS fundamentals across all four mock cards so
@@ -81,6 +92,7 @@ const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
     options: ['Array', 'Linked List', 'Binary Tree', 'Stack'],
     quizTitle: 'Data Structures',
     quizId: 'mock-quiz-1',
+    correctIndices: [0, 1, 3], // Array, Linked List, Stack
   },
   'mock-question-2': {
     id: 'mock-question-2',
@@ -90,6 +102,7 @@ const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
     options: ['O(1)', 'O(log n)', 'O(n)', 'O(n log n)'],
     quizTitle: 'Algorithms',
     quizId: 'mock-quiz-1',
+    correctIndices: [1], // O(log n)
   },
   'mock-question-3': {
     id: 'mock-question-3',
@@ -99,6 +112,7 @@ const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
     options: [],
     quizTitle: 'CS Fundamentals',
     quizId: 'mock-quiz-2',
+    correctIndices: [], // n/a for numeric
   },
   'mock-question-4': {
     id: 'mock-question-4',
@@ -108,6 +122,7 @@ const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
     options: ['Application', 'Transport', 'Network', 'Data Link'],
     quizTitle: 'Networking & OS',
     quizId: 'mock-quiz-2',
+    correctIndices: [2], // Network
   },
 };
 
@@ -140,6 +155,21 @@ interface SessionState {
   lastResponse: { quality: RecallQuality; nextReviewAt: string } | null;
   answeredCount: number;
   qualityCounts: Record<RecallQuality, number>;
+  /**
+   * Knob 8 (Phase D prep, 2026-07-21): indices into `currentQuestion.options[]`
+   * the student has clicked but not yet submitted. Reset on every new
+   * question load and on advance. For SELECT_ONE_IN_LOT this is 0 or 1
+   * element; for SELECT_MANY_IN_LOT it can be many. For numeric
+   * questions it's always [].
+   */
+  selectedOptionIndices: number[];
+  /**
+   * True once the student has clicked at least one option (MCQ only).
+   * Captured for the green/red feedback render - we don't reset this on
+   * `submit` so the feedback stays visible during the
+   * `showing-feedback` phase; only `advance` clears it.
+   */
+  answeredOption: boolean;
 }
 
 type Action =
@@ -149,7 +179,16 @@ type Action =
   | { type: 'submit'; quality: RecallQuality; nextReviewAt: string }
   | { type: 'advance' }
   | { type: 'restart'; items: ReviewItem[] }
-  | { type: 'no-due' };
+  | { type: 'no-due' }
+  /**
+   * Knob 8: toggle an MCQ option. For SELECT_ONE_IN_LOT this replaces
+   * the current selection with [idx]. For SELECT_MANY_IN_LOT it adds
+   * or removes idx from the set. For numeric questions the reducer
+   * ignores the action.
+   */
+  | { type: 'toggle-option'; idx: number }
+  /** Knob 8: clear selectedOptionIndices and answeredOption (called on advance / new question). */
+  | { type: 'reset-options' };
 
 const SESSION_CAP = 10;
 
@@ -178,6 +217,9 @@ function reducer(state: SessionState, action: Action): SessionState {
         ...state,
         currentQuestion: action.question,
         phase: 'awaiting-response',
+        // Knob 8: fresh question → no selection yet.
+        selectedOptionIndices: [],
+        answeredOption: false,
       };
     case 'question-load-failed':
       return { ...state, phase: 'showing-feedback' };
@@ -194,6 +236,8 @@ function reducer(state: SessionState, action: Action): SessionState {
           [action.quality]: state.qualityCounts[action.quality] + 1,
         },
         phase: 'showing-feedback',
+        // Knob 8: `answeredOption` stays true so the green/red
+        // feedback keeps rendering during `showing-feedback`.
       };
     case 'advance': {
       const next = state.currentIndex + 1;
@@ -206,6 +250,9 @@ function reducer(state: SessionState, action: Action): SessionState {
         currentQuestion: null,
         lastResponse: null,
         phase: 'loading-question',
+        // Knob 8: clear MCQ selection for the next question.
+        selectedOptionIndices: [],
+        answeredOption: false,
       };
     }
     case 'restart':
@@ -217,9 +264,38 @@ function reducer(state: SessionState, action: Action): SessionState {
         lastResponse: null,
         answeredCount: 0,
         qualityCounts: { got_it: 0, unsure: 0, missed: 0 },
+        selectedOptionIndices: [],
+        answeredOption: false,
       };
     case 'no-due':
       return { ...state, phase: 'empty' };
+    // Knob 8: toggle / replace selection. SOL replaces, SML adds or
+    // removes. We read the question type off state.currentQuestion
+    // because the action is intentionally minimal (no question payload).
+    case 'toggle-option': {
+      if (!state.currentQuestion) return state;
+      const qType = state.currentQuestion.type;
+      if (qType === 'NUMERIC_ANSWER') return state; // not applicable
+      if (qType === 'SELECT_ONE_IN_LOT') {
+        // Replace selection with the new index (single-choice semantics).
+        return {
+          ...state,
+          selectedOptionIndices: [action.idx],
+          answeredOption: true,
+        };
+      }
+      // SELECT_MANY_IN_LOT — toggle membership.
+      const has = state.selectedOptionIndices.includes(action.idx);
+      return {
+        ...state,
+        selectedOptionIndices: has
+          ? state.selectedOptionIndices.filter(i => i !== action.idx)
+          : [...state.selectedOptionIndices, action.idx],
+        answeredOption: true,
+      };
+    }
+    case 'reset-options':
+      return { ...state, selectedOptionIndices: [], answeredOption: false };
     default:
       return state;
   }
@@ -233,6 +309,9 @@ const initialState: SessionState = {
   lastResponse: null,
   answeredCount: 0,
   qualityCounts: { got_it: 0, unsure: 0, missed: 0 },
+  // Knob 8 (Phase D prep, 2026-07-21): initial MCQ selection state.
+  selectedOptionIndices: [],
+  answeredOption: false,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -240,6 +319,60 @@ const initialState: SessionState = {
 function dayDelta(nextReviewAt: string): number {
   const ms = new Date(nextReviewAt).getTime() - Date.now();
   return Math.max(0, Math.round(ms / (1000 * 60 * 60 * 24)));
+}
+
+// Knob 8 (Phase D prep, 2026-07-21): MCQ answer feedback helpers.
+//
+// The frontend renders three visual states per option AFTER the student
+// clicks (i.e. after `answeredOption === true`):
+//   - 'correct' (green)  -> the student picked this option AND it was right
+//   - 'wrong'   (red)    -> the student picked this option AND it was wrong
+//   - 'idle'    (neutral) -> the student did not pick this option
+//
+// We never reveal which option(s) are correct when the student got it
+// wrong - per the 2026-07-21 UX rule. So non-picked options stay
+// `idle` regardless of whether they would have been correct.
+
+type OptionFeedback = 'idle' | 'correct' | 'wrong';
+
+function evaluateAnswer(
+  selectedIndices: number[],
+  correctIndices: number[],
+  questionType: 'SELECT_ONE_IN_LOT' | 'SELECT_MANY_IN_LOT' | 'NUMERIC_ANSWER',
+): boolean {
+  // Same logic as backend's _evaluateMCQCorrectness + the mock
+  // submitReview in spaced-repetition-api.ts. Sets compare equal size
+  // and mutual membership for SML; single-element match for SOL.
+  if (questionType === 'SELECT_ONE_IN_LOT') {
+    return (
+      selectedIndices.length === 1 &&
+      correctIndices.length === 1 &&
+      selectedIndices[0] === correctIndices[0]
+    );
+  }
+  if (questionType === 'SELECT_MANY_IN_LOT') {
+    if (selectedIndices.length !== correctIndices.length) return false;
+    const a = new Set(selectedIndices);
+    for (const idx of correctIndices) {
+      if (!a.has(idx)) return false;
+    }
+    return true;
+  }
+  // Numeric / descriptive: not an MCQ; treat as not-correct via this helper.
+  return false;
+}
+
+function optionFeedbackFor(
+  idx: number,
+  selectedIndices: number[],
+  correctIndices: number[],
+  questionType: 'SELECT_ONE_IN_LOT' | 'SELECT_MANY_IN_LOT' | 'NUMERIC_ANSWER',
+): OptionFeedback {
+  if (!selectedIndices.includes(idx)) return 'idle';
+  // Student picked this one - was it correct?
+  return evaluateAnswer(selectedIndices, correctIndices, questionType)
+    ? 'correct'
+    : 'wrong';
 }
 
 /**
@@ -456,14 +589,25 @@ export default function ReviewSession() {
   function handleResponse(quality: RecallQuality) {
     const item = state.dueQueue[state.currentIndex];
     if (!item) return;
+    // Knob 8: include the student's MCQ selection so the backend can
+    // compute `isCorrect` and we can light up the picked option(s).
+    // Empty array for numeric/descriptive questions (no selection).
+    const selectedOptionIndices =
+      state.selectedOptionIndices.length > 0
+        ? state.selectedOptionIndices
+        : undefined;
     submitReview.mutate(
-      { questionId: item.question_id, quality },
+      { questionId: item.question_id, quality, selectedOptionIndices },
       {
+        // Knob 8: backend now returns {item, isCorrect}; previous shape
+        // was the bare ReviewItem. Extract via `.item` for the next-review
+        // display; `isCorrect` is already reflected in the green/red
+        // feedback rendered above (driven by state.selectedOptionIndices).
         onSuccess: updated => {
           dispatch({
             type: 'submit',
             quality,
-            nextReviewAt: updated.next_review_at,
+            nextReviewAt: updated.item.next_review_at,
           });
         },
         onError: err => {
@@ -514,6 +658,12 @@ export default function ReviewSession() {
       if (k === '1' || k === '2' || k === '3') {
         if (state.phase !== 'awaiting-response') return;
         if (submitReview.isPending) return;
+        // Knob 8: gate the keyboard shortcuts behind "must answer
+        // first" for MCQs, mirroring the rate-button disabled state.
+        const isMCQ =
+          state.currentQuestion !== null &&
+          state.currentQuestion.type !== 'NUMERIC_ANSWER';
+        if (isMCQ && !state.answeredOption) return;
         e.preventDefault();
         handleResponse(
           k === '1' ? 'got_it' : k === '2' ? 'unsure' : 'missed',
@@ -881,22 +1031,91 @@ export default function ReviewSession() {
         </CardHeader>
         <CardContent className="space-y-3">
           {question && question.options.length > 0 && (
-            <ul className="space-y-2">
+            // Knob 8 (Phase D prep, 2026-07-21): MCQ option list is now
+            // interactive. Each option is a `<button type="button">` that
+            // dispatches `toggle-option`. After `answeredOption === true`
+            // (i.e. the student has clicked at least one option) the
+            // picked option(s) light up green (correct) or red (wrong);
+            // non-picked options stay neutral. Per the 2026-07-21 UX
+            // rule, we never reveal the correct option to the student
+            // when they got it wrong - non-picked options stay idle even
+            // when they would have been correct.
+            <div className="space-y-2" role="group" aria-label="Answer options">
               {question.options.map((opt, idx) => {
                 const letter = String.fromCharCode(65 + idx); // A, B, C, D
+                const isSelected = state.selectedOptionIndices.includes(idx);
+                const isMulti =
+                  question.type === 'SELECT_MANY_IN_LOT';
+                const feedback = state.answeredOption
+                  ? optionFeedbackFor(
+                      idx,
+                      state.selectedOptionIndices,
+                      question.correctIndices ?? [],
+                      question.type,
+                    )
+                  : 'idle';
+                // Map feedback -> Tailwind classes.
+                const baseIdle =
+                  'border-border bg-muted/30 hover:bg-muted/50';
+                const baseSelected =
+                  'border-sky-500 bg-sky-50 ring-1 ring-sky-200';
+                const baseCorrect =
+                  'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200';
+                const baseWrong =
+                  'border-rose-500 bg-rose-50 ring-2 ring-rose-200';
+                const visualClass =
+                  feedback === 'correct'
+                    ? baseCorrect
+                    : feedback === 'wrong'
+                    ? baseWrong
+                    : isSelected
+                    ? baseSelected
+                    : baseIdle;
                 return (
-                  <li
+                  <button
                     key={`${question.id}-${idx}`}
-                    className="flex items-start gap-3 rounded-lg border border-border p-3 bg-muted/30"
+                    type="button"
+                    onClick={() =>
+                      dispatch({ type: 'toggle-option', idx })
+                    }
+                    disabled={state.answeredOption}
+                    aria-pressed={isSelected}
+                    aria-label={`Option ${letter}: ${opt}`}
+                    data-feedback={feedback}
+                    className={`w-full flex items-start gap-3 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:cursor-default ${visualClass}`}
                   >
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background border text-xs font-semibold">
-                      {letter}
+                    <span
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
+                        feedback === 'correct'
+                          ? 'bg-emerald-500 text-white border-emerald-500'
+                          : feedback === 'wrong'
+                          ? 'bg-rose-500 text-white border-rose-500'
+                          : isSelected
+                          ? 'bg-sky-500 text-white border-sky-500'
+                          : 'bg-background'
+                      }`}
+                    >
+                      {feedback === 'correct' ? (
+                        <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                      ) : feedback === 'wrong' ? (
+                        <X className="h-3.5 w-3.5" aria-hidden="true" />
+                      ) : (
+                        letter
+                      )}
                     </span>
-                    <span className="text-sm">{opt}</span>
-                  </li>
+                    <span className="text-sm flex-1">{opt}</span>
+                    {isMulti && isSelected && feedback === 'idle' && (
+                      <span
+                        className="ml-auto h-5 w-5 rounded border-2 border-sky-500 bg-sky-500 flex items-center justify-center"
+                        aria-hidden="true"
+                      >
+                        <Check className="h-3 w-3 text-white" />
+                      </span>
+                    )}
+                  </button>
                 );
               })}
-            </ul>
+            </div>
           )}
           {question && question.type === 'NUMERIC_ANSWER' && (
             <p className="text-sm text-muted-foreground italic">
@@ -948,7 +1167,16 @@ export default function ReviewSession() {
                   aria-keyshortcuts="1"
                   className="flex-col gap-1 h-auto py-3 border-emerald-300 text-emerald-700 hover:bg-emerald-50 focus-visible:ring-emerald-500"
                   onClick={() => handleResponse('got_it')}
-                  disabled={submitReview.isPending}
+                  // Knob 8: rate buttons are disabled until the student
+                  // has selected an option for an MCQ question (or
+                  // while the mutation is in flight). Numeric questions
+                  // don't gate; neither does the empty/disabled phase.
+                  disabled={
+                    submitReview.isPending ||
+                    (state.currentQuestion?.type !== 'NUMERIC_ANSWER' &&
+                      state.currentQuestion !== null &&
+                      !state.answeredOption)
+                  }
                 >
                   <Check className="h-5 w-5" aria-hidden="true" />
                   <span className="font-semibold">Got it</span>
@@ -960,7 +1188,12 @@ export default function ReviewSession() {
                   aria-keyshortcuts="2"
                   className="flex-col gap-1 h-auto py-3 border-amber-300 text-amber-700 hover:bg-amber-50 focus-visible:ring-amber-500"
                   onClick={() => handleResponse('unsure')}
-                  disabled={submitReview.isPending}
+                  disabled={
+                    submitReview.isPending ||
+                    (state.currentQuestion?.type !== 'NUMERIC_ANSWER' &&
+                      state.currentQuestion !== null &&
+                      !state.answeredOption)
+                  }
                 >
                   <HelpCircle className="h-5 w-5" aria-hidden="true" />
                   <span className="font-semibold">Unsure</span>
@@ -972,7 +1205,12 @@ export default function ReviewSession() {
                   aria-keyshortcuts="3"
                   className="flex-col gap-1 h-auto py-3 border-rose-300 text-rose-700 hover:bg-rose-50 focus-visible:ring-rose-500"
                   onClick={() => handleResponse('missed')}
-                  disabled={submitReview.isPending}
+                  disabled={
+                    submitReview.isPending ||
+                    (state.currentQuestion?.type !== 'NUMERIC_ANSWER' &&
+                      state.currentQuestion !== null &&
+                      !state.answeredOption)
+                  }
                 >
                   <X className="h-5 w-5" aria-hidden="true" />
                   <span className="font-semibold">Missed</span>

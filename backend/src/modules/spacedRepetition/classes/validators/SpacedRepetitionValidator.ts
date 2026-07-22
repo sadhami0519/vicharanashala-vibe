@@ -114,6 +114,16 @@ export class SeedScheduleBody {
 /**
  * Body for POST /:studentId/review
  * Sent when a student submits their response to a review question.
+ *
+ * `selectedOptionIndices` is OPTIONAL and only used for MCQ question types
+ * (SELECT_ONE_IN_LOT, SELECT_MANY_IN_LOT). When present, the service
+ * compares the indices against the question's correct option(s) and
+ * returns `isCorrect` in the response. The frontend uses this to light
+ * up the chosen option(s) green (correct) or red (incorrect) — without
+ * ever revealing the correct option to the student when they got it
+ * wrong (per the 2026-07-21 UX rule).
+ *
+ * Omitted for NUMERIC_ANSWER_TYPE and DESCRIPTIVE question types.
  */
 export class SubmitReviewBody {
   @IsString()
@@ -122,6 +132,31 @@ export class SubmitReviewBody {
 
   @IsEnum(['got_it', 'unsure', 'missed'] as const satisfies RecallQuality[])
   quality: RecallQuality;
+
+  /**
+   * Indices into the review-mode `options[]` array (the order the
+   * student saw them in). For SELECT_ONE_IN_LOT this is a single
+   * element; for SELECT_MANY_IN_LOT it can be multiple. Optional —
+   * omitted for non-MCQ question types.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsNumber({}, { each: true })
+  @Min(0, { each: true })
+  @Max(7, { each: true })
+  selectedOptionIndices?: number[];
+}
+
+/**
+ * Response for POST /:studentId/review.
+ * Returns the updated ReviewItem after SM-2 recalculation. `isCorrect`
+ * is populated when the request included `selectedOptionIndices`;
+ * undefined otherwise (so non-MCQ question types stay unaffected).
+ */
+export class SubmitReviewResponse {
+  item: any; // IReviewItem shape; left `any` to avoid an extra import
+  isCorrect?: boolean;
 }
 
 /**

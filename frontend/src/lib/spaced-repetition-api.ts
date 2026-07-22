@@ -296,11 +296,20 @@ export async function seedSchedule(
 /**
  * Submit a recall quality response for a single question.
  * POST /api/spaced-repetition/:studentId/review
+ *
+ * For MCQ question types, pass `selectedOptionIndices` (the indices into
+ * the review-mode `options[]` array the student saw). The backend will
+ * compute whether the student's pick matched the canonical correct
+ * option(s) and return `isCorrect` in the response. The frontend uses
+ * this to light up the picked option(s) green (correct) or red (wrong).
+ *
+ * Omit `selectedOptionIndices` for numeric/descriptive question types.
  */
 export async function submitReview(
   studentId: string,
   questionId: string,
   quality: RecallQuality,
+  selectedOptionIndices?: number[],
 ): Promise<SubmitReviewResponse> {
   if (USE_MOCK) {
     await new Promise(r => setTimeout(r, 300));
@@ -315,7 +324,7 @@ export async function submitReview(
     const newEF = Math.max(1.3, item.EF + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)));
     const newN = q < 3 ? 0 : item.n + 1;
     const nextInterval = newN === 1 ? 1 : newN === 2 ? 6 : Math.round(item.interval_days * newEF);
-    MOCK_REVIEW_ITEMS[idx] = {
+    const updated: ReviewItem = {
       ...item,
       n: newN,
       EF: Number(newEF.toFixed(2)),
@@ -323,12 +332,34 @@ export async function submitReview(
       last_reviewed_at: new Date().toISOString(),
       next_review_at: futureDate(nextInterval).toISOString(),
     };
+    MOCK_REVIEW_ITEMS[idx] = updated;
     persistMockState();
-    return MOCK_REVIEW_ITEMS[idx];
+
+    // Knob 8: MCQ correctness check against the mock catalogue's
+    // correctIndices. Mirrors the backend's _evaluateMCQCorrectness
+    // (compare sets; SOL = single-element match, SML = exact set match).
+    let isCorrect: boolean | undefined;
+    if (selectedOptionIndices && selectedOptionIndices.length > 0) {
+      const q = MOCK_QUESTIONS_CATALOG[questionId];
+      const correct = q?.correctIndices;
+      if (correct && correct.length > 0) {
+        if (q?.type === 'SELECT_ONE_IN_LOT') {
+          isCorrect =
+            selectedOptionIndices.length === 1 &&
+            selectedOptionIndices[0] === correct[0];
+        } else if (q?.type === 'SELECT_MANY_IN_LOT') {
+          const a = new Set(selectedOptionIndices);
+          const b = new Set(correct);
+          isCorrect = a.size === b.size && [...a].every(x => b.has(x));
+        }
+      }
+    }
+
+    return { item: updated, isCorrect };
   }
   return apiFetch(`/api/spaced-repetition/${studentId}/review`, {
     method: 'POST',
-    body: JSON.stringify({ questionId, quality }),
+    body: JSON.stringify({ questionId, quality, selectedOptionIndices }),
   });
 }
 
@@ -703,6 +734,44 @@ export type AssignableQuestion = {
   bankIds: string[];
   bankTitles: (string | null)[];
   fromCourse: boolean;
+};
+
+/**
+ * Knob 8 (Phase D prep, 2026-07-21): Mock correctness catalogue.
+ * Maps questionId → indices into the corresponding `MOCK_QUESTIONS[].options[]`
+ * array (defined in `ReviewSession.tsx`) that represent the canonical
+ * correct answer. Used by `submitReview()` to compute `isCorrect` in
+ * mock mode, mirroring the backend's `_evaluateMCQCorrectness`.
+ *
+ * Numeric/descriptive questions have no correctIndices (they're not
+ * MCQs, so the click-feedback UX doesn't apply).
+ *
+ * Single source of truth for the demo content's correctness:
+ *   - mock-question-1 (SML): 'Array' (idx 0), 'Linked List' (1), 'Stack' (3) — linear
+ *   - mock-question-2 (SOL): 'O(log n)' (idx 1) — binary search worst case
+ *   - mock-question-3 (NUMERIC): no options, n/a
+ *   - mock-question-4 (SOL): 'Network' (idx 2) — OSI routing layer
+ */
+const MOCK_QUESTIONS_CATALOG: Record<
+  string,
+  { type: string; correctIndices: number[] }
+> = {
+  'mock-question-1': {
+    type: 'SELECT_MANY_IN_LOT',
+    correctIndices: [0, 1, 3], // Array, Linked List, Stack
+  },
+  'mock-question-2': {
+    type: 'SELECT_ONE_IN_LOT',
+    correctIndices: [1], // O(log n)
+  },
+  'mock-question-3': {
+    type: 'NUMERIC_ANSWER',
+    correctIndices: [],
+  },
+  'mock-question-4': {
+    type: 'SELECT_ONE_IN_LOT',
+    correctIndices: [2], // Network
+  },
 };
 
 /**

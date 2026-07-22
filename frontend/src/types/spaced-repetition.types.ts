@@ -44,7 +44,18 @@ export interface SeedScheduleResponse {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface SubmitReviewResponse extends ReviewItem {}
+export interface SubmitReviewResponse {
+  item: ReviewItem;
+  /**
+   * Knob 8 (Phase D prep, 2026-07-21): true/false for MCQ question types
+   * when the student submits their selected option indices. undefined for
+   * numeric/descriptive questions or when no selection was sent. Backend
+   * uses this to drive green/red feedback on the picked options without
+   * ever revealing the correct answer to the student when they got it
+   * wrong (per the 2026-07-21 UX rule).
+   */
+  isCorrect?: boolean;
+}
 
 export interface UpdateOptOutResponse {
   updatedCount: number;

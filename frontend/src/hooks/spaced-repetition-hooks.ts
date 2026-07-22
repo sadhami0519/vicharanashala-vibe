@@ -60,10 +60,18 @@ export function useSubmitReview(studentId: string) {
     mutationFn: ({
       questionId,
       quality,
+      selectedOptionIndices,
     }: {
       questionId: string;
       quality: RecallQuality;
-    }) => submitReview(studentId, questionId, quality),
+      /**
+       * Knob 8 (Phase D prep, 2026-07-21): indices into the review-mode
+       * `options[]` array the student clicked. Pass for MCQ question
+       * types so the backend can compute `isCorrect` and the frontend
+       * can light up green/red feedback. Omit for numeric/descriptive.
+       */
+      selectedOptionIndices?: number[];
+    }) => submitReview(studentId, questionId, quality, selectedOptionIndices),
     onSuccess: () => {
       // Invalidate schedule so dashboard reflects updated next_review_at
       queryClient.invalidateQueries({
