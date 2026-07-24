@@ -6,6 +6,7 @@ import {
   computeCurrentStreak,
   computeLearnerCategory,
   computeLongestStreak,
+  computeNextBadgeProximity,
   computeRetention30d,
   computeStatusSnapshots,
   getBadgeById,
@@ -285,5 +286,63 @@ describe('computeLearnerCategory', () => {
 
   it('treats null retention as low', () => {
     expect(computeLearnerCategory(null, 75)).toBe('sprinter');
+  });
+});
+
+// ── Next-badge proximity ────────────────────────────────────────────
+
+describe('computeNextBadgeProximity', () => {
+  it('returns the closest unearned badge for an empty items list', () => {
+    // Empty list → countDistinctCourses = 0 → Vikram current = target = 0
+    // → distance 0, filtered out. All other badges have current = 0
+    // and target = N. Two badges at distance 1: sukh-dukh (apprentice,
+    // target=1) and kohinoor (courtier, target=1). Tier tie-break
+    // picks sukh-dukh (apprentice < courtier).
+    const result = computeNextBadgeProximity([]);
+    expect(result).not.toBeNull();
+    expect(result?.badgeId).toBe('sukh-dukh');
+    expect(result?.distance).toBe(1);
+  });
+
+  it('returns Sukh Dukh (closest apprentice-tier badge) for a fresh student', () => {
+    const items = [makeItem({ last_reviewed_at: null, n: 0, EF: 2.5 })];
+    const result = computeNextBadgeProximity(items);
+    expect(result).not.toBeNull();
+    expect(result?.badgeId).toBe('sukh-dukh');
+    expect(result?.badgeName).toBe('Sukh Dukh');
+    expect(result?.distance).toBe(1);
+    expect(result?.unit).toBe('unsure-answers');
+  });
+
+  it('prefers Dwarapala when total reviews (n) is closer to its target', () => {
+    // n=8 on one item: dwarapala distance = 10 - 8 = 2 (wins over
+    // sukh-dukh whose recovered-missed proxy is n=0).
+    const items = [
+      makeItem({ n: 8, EF: 2.7, last_reviewed_at: new Date() }),
+    ];
+    const result = computeNextBadgeProximity(items);
+    expect(result?.badgeId).toBe('dwarapala');
+    expect(result?.distance).toBe(2);
+  });
+
+  it('excludes Vikram even when current === target (zero distance, not earned)', () => {
+    // Items in 2 courses → Vikram current = target = 2 → distance 0
+    // but not earned. Must be filtered out; the next-closest wins.
+    const items = [
+      makeItem({ course_id: 'c1', last_reviewed_at: new Date(), n: 0 }),
+      makeItem({ course_id: 'c2', last_reviewed_at: new Date(), n: 0 }),
+    ];
+    const result = computeNextBadgeProximity(items);
+    expect(result).not.toBeNull();
+    expect(result?.badgeId).not.toBe('vikram');
+  });
+
+  it('tie-breaks by tier (apprentice wins over courtier at distance=1)', () => {
+    // Both sukh-dukh (apprentice, target=1) and kohinoor (courtier,
+    // target=1) are at distance 1 for a fresh student. Apprentice
+    // tier wins the tie-break.
+    const result = computeNextBadgeProximity([]);
+    const winner = BADGE_CATALOGUE.find((b) => b.id === result?.badgeId);
+    expect(winner?.tier).toBe('apprentice');
   });
 });

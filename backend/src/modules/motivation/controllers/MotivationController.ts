@@ -19,6 +19,7 @@ import {
   computeStatusSnapshots,
   computeRetention30d,
   computeLearnerCategory,
+  computeNextBadgeProximity,
 } from '../services/MotivationService.js';
 import {
   StudentIdParam,
@@ -201,6 +202,23 @@ export class MotivationController {
                 Math.round((volume.last30Days.value / studentItems.length) * 100),
               )
             : 0;
+        // Per-student: their single closest unearned badge. Service
+        // returns null if all 12 badges are earned. studentName is the
+        // placeholder until user-resolution is wired (see Day 3
+        // follow-ups).
+        const proximity = computeNextBadgeProximity(studentItems);
+        const nextBadge =
+          proximity === null
+            ? null
+            : {
+                studentId,
+                studentName: studentId,
+                badgeId: proximity.badgeId,
+                badgeName: proximity.badgeName,
+                distance: proximity.distance,
+                unit: proximity.unit,
+              };
+
         return {
           studentId,
           studentName: studentId,
@@ -212,6 +230,7 @@ export class MotivationController {
           dippingCount: studentItems.filter(
             (i) => i.n === 0 && (i.EF ?? 0) <= 2.0,
           ).length,
+          nextBadge,
         };
       }),
     );
@@ -226,9 +245,16 @@ export class MotivationController {
         dippingCount,
       }));
 
-    // Panel B — Next-badge proximity (v1: empty — derived per-student
-    // in v1.1 once we have a richer stored-badge progression model).
-    const nextBadges: MentorViewResponse['nextBadges'] = [];
+    // Panel B — Next-badge proximity. Each student contributes at most
+    // one row (their closest unearned badge). Sort by distance asc;
+    // tie-break by alphabetic badgeId for deterministic ordering.
+    const nextBadges: MentorViewResponse['nextBadges'] = perStudent
+      .map((r) => r.nextBadge)
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => {
+        if (a.distance !== b.distance) return a.distance - b.distance;
+        return a.badgeId.localeCompare(b.badgeId);
+      });
 
     // Panel C — Learner categories 2×2 quadrant
     const learnerCategories = perStudent.map(
