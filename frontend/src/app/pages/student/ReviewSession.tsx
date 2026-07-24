@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useReducer, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Card,
   CardContent,
@@ -32,6 +33,7 @@ import {
   useGetCourseRetention,
   useSubmitReview,
   useGetStudentSRStatus,
+  spacedRepetitionKeys,
 } from '@/hooks/spaced-repetition-hooks';
 // Knob 8b (Phase D prep, 2026-07-22): honest quality gating helper.
 // Kept in a separate lib file so it stays pure and unit-testable; this
@@ -530,6 +532,11 @@ export default function ReviewSession() {
     refetch: refetchSchedule,
   } = useGetSchedule(studentId);
 
+  // F3 fix: used by handleRestart to read fresh schedule data after an
+  // explicit refetch (TanStack Query's data param hasn't updated yet
+  // because React hasn't re-rendered).
+  const queryClient = useQueryClient();
+
   // Knob 6: detect whether this student has SR turned off by a teacher.
   // When true, the review session shows a distinct empty state — no
   // cards to walk, no call to action.
@@ -654,9 +661,24 @@ export default function ReviewSession() {
     dispatch({ type: 'advance' });
   }
 
-  function handleRestart() {
-    refetchSchedule();
-    dispatch({ type: 'restart', items: dueItems });
+  async function handleRestart() {
+    // F3 fix: refetch first, then read fresh `schedule` from the React
+    // Query cache. Without this, we dispatched with the closure-captured
+    // `dueItems` snapshot — newly-boosted cards from the same session
+    // wouldn't appear in the restart until a full page reload.
+    await refetchSchedule();
+    const freshSchedule =
+      queryClient.getQueryData<ReviewItem[]>(
+        spacedRepetitionKeys.schedule(studentId),
+      ) ?? [];
+    const now = Date.now();
+    const freshDue = freshSchedule.filter(
+      item =>
+        !item.notification_opt_out &&
+        new Date(item.next_review_at).getTime() <= now &&
+        (!targetCourseId || item.course_id === targetCourseId),
+    );
+    dispatch({ type: 'restart', items: freshDue });
   }
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────
