@@ -33,6 +33,10 @@ import {
   useSubmitReview,
   useGetStudentSRStatus,
 } from '@/hooks/spaced-repetition-hooks';
+// Knob 8b (Phase D prep, 2026-07-22): honest quality gating helper.
+// Kept in a separate lib file so it stays pure and unit-testable; this
+// component just imports the function.
+import { canRateAsGotIt } from '@/lib/spaced-repetition-rating';
 import {
   ReviewItem,
   RecallQuality,
@@ -152,7 +156,17 @@ interface SessionState {
   dueQueue: ReviewItem[];
   currentIndex: number;
   currentQuestion: ReviewQuestionResponse | null;
-  lastResponse: { quality: RecallQuality; nextReviewAt: string } | null;
+  lastResponse: {
+    quality: RecallQuality;
+    nextReviewAt: string;
+    /**
+     * Knob 8b (Phase D prep, 2026-07-22): mirrored from the most recent
+     * submit response. Drives the `Got it` rate-button gate. Undefined
+     * for numeric/descriptive questions, MCQs without selection, or
+     * backend fail-open.
+     */
+    isCorrect?: boolean;
+  } | null;
   answeredCount: number;
   qualityCounts: Record<RecallQuality, number>;
   /**
@@ -176,7 +190,14 @@ type Action =
   | { type: 'schedule-loaded'; items: ReviewItem[] }
   | { type: 'question-loaded'; question: ReviewQuestionResponse }
   | { type: 'question-load-failed' }
-  | { type: 'submit'; quality: RecallQuality; nextReviewAt: string }
+  | {
+      type: 'submit';
+      quality: RecallQuality;
+      nextReviewAt: string;
+      /** Knob 8b: threaded from the submitReview response so the rate
+       * button + keyboard handler can gate `Got it` on a wrong MCQ pick. */
+      isCorrect?: boolean;
+    }
   | { type: 'advance' }
   | { type: 'restart'; items: ReviewItem[] }
   | { type: 'no-due' }
@@ -229,6 +250,10 @@ function reducer(state: SessionState, action: Action): SessionState {
         lastResponse: {
           quality: action.quality,
           nextReviewAt: action.nextReviewAt,
+          // Knob 8b: threaded through so the rate-button `Got it` gate
+          // and the keyboard-`1` shortcut can read it without an
+          // extra fetch.
+          isCorrect: action.isCorrect,
         },
         answeredCount: state.answeredCount + 1,
         qualityCounts: {
@@ -608,6 +633,10 @@ export default function ReviewSession() {
             type: 'submit',
             quality,
             nextReviewAt: updated.item.next_review_at,
+            // Knob 8b: pass through so the reducer stores it on
+            // `lastResponse.isCorrect`. The rate-button `Got it` gate
+            // reads this directly.
+            isCorrect: updated.isCorrect,
           });
         },
         onError: err => {
@@ -664,6 +693,18 @@ export default function ReviewSession() {
           state.currentQuestion !== null &&
           state.currentQuestion.type !== 'NUMERIC_ANSWER';
         if (isMCQ && !state.answeredOption) return;
+        // Knob 8b: gate keyboard `1` (`got_it`) on the same honest-quality
+        // rule as the button. Mirrors the disabled state so the
+        // shortcut doesn't bypass the gate. `2` and `3` are unaffected.
+        if (
+          k === '1' &&
+          !canRateAsGotIt(
+            state.currentQuestion?.type,
+            state.lastResponse?.isCorrect,
+          )
+        ) {
+          return;
+        }
         e.preventDefault();
         handleResponse(
           k === '1' ? 'got_it' : k === '2' ? 'unsure' : 'missed',
@@ -1171,11 +1212,22 @@ export default function ReviewSession() {
                   // has selected an option for an MCQ question (or
                   // while the mutation is in flight). Numeric questions
                   // don't gate; neither does the empty/disabled phase.
+                  //
+                  // Knob 8b: when the student's MCQ pick was
+                  // definitively wrong (`isCorrect === false`), `Got it`
+                  // is also disabled — letting it through would let the
+                  // student record a corrupt q=5 signal post-feedback.
+                  // `Unsure` and `Missed` stay enabled; honesty wins
+                  // over consistency.
                   disabled={
                     submitReview.isPending ||
                     (state.currentQuestion?.type !== 'NUMERIC_ANSWER' &&
                       state.currentQuestion !== null &&
-                      !state.answeredOption)
+                      !state.answeredOption) ||
+                    !canRateAsGotIt(
+                      state.currentQuestion?.type,
+                      state.lastResponse?.isCorrect,
+                    )
                   }
                 >
                   <Check className="h-5 w-5" aria-hidden="true" />
