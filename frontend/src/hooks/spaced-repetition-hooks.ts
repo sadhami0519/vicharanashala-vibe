@@ -241,11 +241,14 @@ export function useBulkSetStudentSRDisabled() {
 
 // ── Manual Review Assignment hooks (Knob 7, Phase C, 2026-07-21) ────────
 
-export function useGetAssignableQuestions(courseId: string) {
+export function useGetAssignableQuestions(
+  courseId: string,
+  enabled: boolean = true,
+) {
   return useQuery({
     queryKey: spacedRepetitionKeys.assignableQuestions(courseId),
     queryFn: () => getAssignableQuestions(courseId),
-    enabled: !!courseId && courseId.length > 5,
+    enabled: !!courseId && courseId.length > 5 && enabled,
   });
 }
 
