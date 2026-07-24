@@ -140,10 +140,10 @@ export default function ReviewPage() {
             <h2 className="text-2xl font-medium mb-6">Question {currentCard.question_id}</h2>
             
             {/* Teacher Remediation Hint - Shows up if they have struggled before */}
-            {currentCard.remediationHint && (
+            {currentCard.remediation_hint && (
               <div className="bg-blue-50 text-blue-800 border border-blue-200 rounded p-3 text-sm flex items-start gap-2 max-w-sm mb-6">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                <span className="text-left"><strong>Teacher Hint:</strong> {currentCard.remediationHint}</span>
+                <span className="text-left"><strong>Teacher Hint:</strong> {currentCard.remediation_hint}</span>
               </div>
             )}
 
