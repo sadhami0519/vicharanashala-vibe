@@ -684,6 +684,20 @@ export default function ReviewSession() {
   // ── Keyboard shortcuts ──────────────────────────────────────────────
   // 1 / 2 / 3 → rate card. Space / Enter / ArrowRight → advance. Disabled
   // when focus is in a text input so future text fields don't break.
+  //
+  // F6 (audit 2026-07-24): verified clean. Guards in order:
+  //   1. Modifier guard — skip when Cmd/Ctrl/Alt held (don't hijack
+  //      browser shortcuts).
+  //   2. Typing guard — skip when focus is in INPUT/TEXTAREA/SELECT
+  //      or a contentEditable element (future text fields won't break).
+  //   3. Rate path: phase must be 'awaiting-response', submitReview
+  //      must not be pending, MCQ must have an answered option (Knob 8),
+  //      and `1` (`got_it`) must pass the honest-quality check (Knob 8b).
+  //   4. Advance path: phase must be 'showing-feedback', bounds check
+  //      (defensive), and skip if a button is focused so the native
+  //      onClick handles it.
+  // The dependency array re-registers the effect on phase/index/queue
+  // changes; closures capture the latest state values on each run.
 
   const gotItRef = useRef<HTMLButtonElement | null>(null);
   const nextRef = useRef<HTMLButtonElement | null>(null);

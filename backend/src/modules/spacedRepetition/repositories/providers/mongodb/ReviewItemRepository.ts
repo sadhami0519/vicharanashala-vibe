@@ -2,7 +2,7 @@ import { IReviewItem } from '#spacedRepetition/interfaces/IReviewItem.js';
 import { GLOBAL_TYPES } from '#root/types.js';
 import { MongoDatabase } from '#shared/database/providers/mongo/MongoDatabase.js';
 import { injectable, inject } from 'inversify';
-import { Collection, ClientSession, ObjectId } from 'mongodb';
+import { Collection, ClientSession, ObjectId, Filter } from 'mongodb';
 
 @injectable()
 class ReviewItemRepository {
@@ -54,15 +54,33 @@ class ReviewItemRepository {
   /**
    * Find all items whose next_review_at is on or before `now`.
    * Called by the cron job to determine which students need a notification.
+   *
+   * Optional `limit` caps the result set. The cron currently passes
+   * no cap because it needs every due item across all students to
+   * group notifications. The `limit` is a defensive foot-gun for
+   * future callers (e.g. a student-facing "what's due" widget) to
+   * avoid pulling the entire schedule per request (audit B3).
    */
   async findDueItems(
     now: Date,
     session?: ClientSession,
+    limit?: number,
+    options?: { excludeOptedOut?: boolean },
   ): Promise<IReviewItem[]> {
     await this.init();
-    return this.reviewItemCollection
-      .find({ next_review_at: { $lte: now } }, { session })
-      .toArray();
+    const filter: Filter<IReviewItem> = { next_review_at: { $lte: now } };
+    if (options?.excludeOptedOut) {
+      // N2: push the opted-out filter to the database so the cron
+      // doesn't pull items it will immediately discard. Uses $ne:true
+      // (not `==:false`) so docs that pre-date the field default to
+      // "not opted out" — matches the existing Knob 5 codebase pattern.
+      filter.notification_opt_out = { $ne: true };
+    }
+    const cursor = this.reviewItemCollection.find(filter, { session });
+    if (typeof limit === 'number' && limit > 0) {
+      cursor.limit(limit);
+    }
+    return cursor.toArray();
   }
 
   /**

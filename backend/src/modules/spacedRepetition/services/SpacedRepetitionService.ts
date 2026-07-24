@@ -1,4 +1,5 @@
 import { injectable, inject } from 'inversify';
+import { ClientSession } from 'mongodb';
 import { NotFoundError, InternalServerError, ForbiddenError, HttpError } from 'routing-controllers';
 import { SPACED_REPETITION_TYPES } from '../types.js';
 import { BaseService } from '#root/shared/classes/BaseService.js';
@@ -64,9 +65,21 @@ class SpacedRepetitionService extends BaseService {
   /**
    * Throws ForbiddenError if the student has SR disabled.
    * Used to short-circuit any write path (seed, review) when SR is off.
+   *
+   * Opt-in `session` parameter so callers running inside a MongoDB
+   * transaction can fold the read into the same snapshot as their
+   * writes. This closes the race window where a concurrent
+   * setStatus() could disable SR between the read and the write
+   * (audit finding B2).
    */
-  private async _assertSREnabled(studentId: string): Promise<void> {
-    const disabled = await this.studentSRStatusRepo.getStatus(studentId);
+  private async _assertSREnabled(
+    studentId: string,
+    session?: ClientSession,
+  ): Promise<void> {
+    const disabled = await this.studentSRStatusRepo.getStatus(
+      studentId,
+      session,
+    );
     if (disabled) {
       throw new ForbiddenError(
         'Spaced repetition is disabled for this student.',
@@ -210,7 +223,11 @@ class SpacedRepetitionService extends BaseService {
       // an automatic gate — the auto-seeding course-completion hook will
       // silently no-op (caught upstream), and explicit seeds from the
       // teacher UI will surface a clear 403.
-      await this._assertSREnabled(studentId);
+      // B2: pass the active transaction session so the read runs in
+      // the same snapshot as the subsequent write — closes the race
+      // window where a concurrent setStatus() could disable SR
+      // between the read and the insertMany below.
+      await this._assertSREnabled(studentId, session);
 
       const now = new Date();
       const firstReviewAt = new Date(now);
@@ -225,6 +242,12 @@ class SpacedRepetitionService extends BaseService {
         last_reviewed_at: null,
         notification_opt_out: false,
         exam_prep_mode: false,
+        // W3: analytics distinguishes auto-seed vs manual-assigned
+        // review items. assignReview() already writes 'manual'; this
+        // path was previously leaving the field undefined, which
+        // downstream analytics treated as "unknown source" for 100%
+        // of seeded items.
+        source: 'auto-seed',
       }));
 
       // Guard against double-seeding: skip if items already exist for this student+course
@@ -278,7 +301,9 @@ class SpacedRepetitionService extends BaseService {
       // Knob 6: refuse to accept reviews if SR is disabled.
       // The student-facing empty state already gates the review session,
       // but this is a belt-and-braces guard for direct API calls.
-      await this._assertSREnabled(studentId);
+      // B2: pass the active transaction session — see _assertSREnabled
+      // docblock for the race-window rationale.
+      await this._assertSREnabled(studentId, session);
 
       const item = await this.reviewItemRepo.findByStudentAndQuestion(
         studentId,
@@ -419,22 +444,66 @@ class SpacedRepetitionService extends BaseService {
     return this._withTransaction(async session => {
       const items = await this.reviewItemRepo.findByStudent(studentId, session);
       
-      // Apply Exam-Prep Mode priority sorting
-      items.sort((a, b) => {
-        // 1. Exam Prep items float to the absolute top of the queue
-        if (a.exam_prep_mode && !b.exam_prep_mode) return -1;
-        if (!a.exam_prep_mode && b.exam_prep_mode) return 1;
-        
-        // 2. Within Exam Prep Mode, sort by weakest cards first (lowest EF)
+      // Apply Exam-Prep Mode priority sorting (W1+W2: overdue-first,
+      // then exam-prep weakest-first within non-overdue). See
+      // _sortItemsByPriority docblock for the full priority order.
+      this._sortItemsByPriority(items, new Date());
+
+      return items;
+    });
+  }
+
+  /**
+   * Sort ReviewItems by priority for dashboard/schedule display.
+   *
+   * Priority order (top to bottom):
+   *   1. Overdue first — anything with `next_review_at` in the past
+   *      surfaces above everything else. Within the overdue bucket,
+   *      oldest overdue first (most neglected).
+   *   2. Exam-Prep Mode — among non-overdue cards, exam_prep_mode
+   *      floats above normal. Within exam-prep: weakest EF first
+   *      (the original Knob 4 intent).
+   *   3. Standard chronological for non-overdue normal-mode cards.
+   *
+   * Audit W1 fix: previously, exam_prep_mode sorted to the absolute
+   * top regardless of overdue status, so a student with 50 overdue
+   * cards would see weak-but-not-due cards first. Now overdue always
+   * wins, then exam-prep, then chronological.
+   *
+   * Audit W2 fix: the sort logic was duplicated in getSchedule() and
+   * getCourseRetention(). Extracted here so both share one source of
+   * truth.
+   */
+  private _sortItemsByPriority(items: IReviewItem[], now: Date): IReviewItem[] {
+    const nowMs = now.getTime();
+    return items.sort((a, b) => {
+      const aOverdue = a.next_review_at.getTime() < nowMs;
+      const bOverdue = b.next_review_at.getTime() < nowMs;
+      if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+
+      // Same overdue bucket. Within overdue: oldest first.
+      if (aOverdue) {
+        const cmp = a.next_review_at.getTime() - b.next_review_at.getTime();
+        if (cmp !== 0) return cmp;
+      } else {
+        // Same non-overdue bucket. Exam-prep mode wins.
+        if (a.exam_prep_mode !== b.exam_prep_mode) {
+          return a.exam_prep_mode ? -1 : 1;
+        }
+        // Within exam-prep: weakest EF first. Within normal: chronological.
         if (a.exam_prep_mode && b.exam_prep_mode) {
           if (a.EF !== b.EF) return a.EF - b.EF;
         }
-        
-        // 3. Default: Standard chronological sort for normal items
-        return a.next_review_at.getTime() - b.next_review_at.getTime();
-      });
+        const cmp = a.next_review_at.getTime() - b.next_review_at.getTime();
+        if (cmp !== 0) return cmp;
+      }
 
-      return items;
+      // Stable tiebreak by _id so equal-key items don't flip order
+      // across calls (defensive — V8's sort is stable, but tests can
+      // be sensitive).
+      const aId = a._id?.toString() ?? '';
+      const bId = b._id?.toString() ?? '';
+      return aId.localeCompare(bId);
     });
   }
 
@@ -465,19 +534,11 @@ class SpacedRepetitionService extends BaseService {
         );
       }
 
-      // Apply Exam-Prep Mode priority sorting for dashboard consistency
-      items.sort((a, b) => {
-        if (a.exam_prep_mode && !b.exam_prep_mode) return -1;
-        if (!a.exam_prep_mode && b.exam_prep_mode) return 1;
-        
-        if (a.exam_prep_mode && b.exam_prep_mode) {
-          if (a.EF !== b.EF) return a.EF - b.EF;
-        }
-        
-        return a.next_review_at.getTime() - b.next_review_at.getTime();
-      });
-
+      // Apply Exam-Prep Mode priority sorting (W1+W2: same helper as
+      // getSchedule; overdue-first then exam-prep weakest-first within
+      // non-overdue). See _sortItemsByPriority docblock.
       const now = new Date();
+      this._sortItemsByPriority(items, now);
       const sevenDaysFromNow = new Date(now);
       sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
 

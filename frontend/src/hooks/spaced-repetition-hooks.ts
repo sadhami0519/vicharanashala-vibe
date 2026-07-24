@@ -45,10 +45,16 @@ export function useGetSchedule(studentId: string) {
 }
 
 export function useGetCourseRetention(studentId: string, courseId: string) {
+  // F5: tighten the enabled gate. A 6-char floor matches the existing
+  // useGetAssignableQuestions pattern (F2) and rejects accidental
+  // empty/short strings that would otherwise trigger a backend call
+  // destined to 404. Mongo ObjectIds are 24 hex chars, so anything
+  // shorter than 6 is almost certainly a bug upstream.
+  const safeCourseId = (courseId ?? '').trim();
   return useQuery({
-    queryKey: spacedRepetitionKeys.courseRetention(studentId, courseId),
-    queryFn: () => getCourseRetention(studentId, courseId),
-    enabled: !!studentId && !!courseId,
+    queryKey: spacedRepetitionKeys.courseRetention(studentId, safeCourseId),
+    queryFn: () => getCourseRetention(studentId, safeCourseId),
+    enabled: !!studentId && safeCourseId.length >= 6,
   });
 }
 

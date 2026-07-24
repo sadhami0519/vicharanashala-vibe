@@ -9,11 +9,14 @@ import {
   HttpCode,
   OnUndefined,
   Authorized,
+  ForbiddenError,
+  CurrentUser,
   Param,
 } from 'routing-controllers';
 import { OpenAPI, ResponseSchema } from 'routing-controllers-openapi';
 import { SPACED_REPETITION_TYPES } from '../types.js';
 import { SpacedRepetitionService } from '../services/SpacedRepetitionService.js';
+import { IUser } from '#root/shared/interfaces/models.js';
 import {
   SeedScheduleBody,
   SeedScheduleResponse,
@@ -54,13 +57,57 @@ class SpacedRepetitionController {
     private readonly spacedRepetitionService: SpacedRepetitionService,
   ) {}
 
+  /**
+   * B1-actual guard — self-or-admin on per-student endpoints.
+   * A student may only read or mutate their own review schedule; only
+   * admins may act on another student's schedule. Throws ForbiddenError
+   * otherwise so the request 403s before the service runs.
+   *
+   * The project-wide `authorizationChecker` already verifies the bearer
+   * token; this helper layers ownership on top of that.
+   */
+  private _assertCanActOnStudent(user: IUser, studentId: string): void {
+    const isAdmin = user.roles?.includes('admin');
+    const isSelf = user.firebaseUID === studentId;
+    if (!isAdmin && !isSelf) {
+      throw new ForbiddenError(
+        'Cannot read or mutate another student\'s review schedule',
+      );
+    }
+  }
+
+  /**
+   * B1-actual guard — admin-only on cohort/course endpoints.
+   * Any endpoint that operates on multiple students or a course-wide
+   * teacher surface (bulk toggles, cohort enumeration, question
+   * picker) is admin-gated. Throws ForbiddenError otherwise.
+   */
+  private _assertAdmin(user: IUser): void {
+    if (!user.roles?.includes('admin')) {
+      throw new ForbiddenError(
+        'This action requires an admin or teacher role',
+      );
+    }
+  }
+
   @OpenAPI({
     summary: 'Seed a spaced repetition schedule',
     description: `Creates one ReviewItem per question for a student on course completion.
     Called by the course completion hook with the full list of question IDs
-    from the completed course's question bank.`,
+    from the completed course's question bank.
+
+    N1 (re-enabled 2026-07-24): this endpoint was previously flagged
+    with \`//@Authorized()\` to allow Emie to inspect student UIDs
+    manually during the school's initial SR setup. That demo-only
+    bypass is now closed. Endpoint is admin-only:
+      - @Authorized() requires a valid bearer token
+      - _assertAdmin() requires the caller be in user.roles
+    The course-completion hook (\`ProgressService.triggerSpacedRepetitionSeed\`)
+    invokes the same service method directly via the container, NOT
+    via HTTP, so the auto-seed path is unaffected by the gate.
+    `,
   })
-  //@Authorized()
+  @Authorized()
   @Post('/:studentId/seed')
   @HttpCode(201)
   @ResponseSchema(SeedScheduleResponse, {
@@ -68,9 +115,11 @@ class SpacedRepetitionController {
     statusCode: 201,
   })
   async seedSchedule(
+    @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
     @Body() body: SeedScheduleBody,
   ): Promise<SeedScheduleResponse> {
+    this._assertAdmin(user);
     const { studentId } = params;
     const { courseId, questionIds } = body;
     return this.spacedRepetitionService.seedSchedule(studentId, courseId, questionIds);
@@ -90,12 +139,14 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async bulkUpdateNotificationPreference(
+    @CurrentUser() user: IUser,
     @Body() body: BulkUpdateOptOutBody,
   ): Promise<BulkUpdateOptOutResponse> {
+    this._assertAdmin(user);
     const { studentIds, courseId, optOut } = body;
     return this.spacedRepetitionService.bulkUpdateNotificationPreference(
-      studentIds, 
-      courseId, 
+      studentIds,
+      courseId,
       optOut
     ) as unknown as Promise<BulkUpdateOptOutResponse>;
   }
@@ -109,8 +160,10 @@ class SpacedRepetitionController {
   @Get('/courses/:courseId/students')
   @HttpCode(200)
   async getCourseStudents(
+    @CurrentUser() user: IUser,
     @Param('courseId') courseId: string,
   ): Promise<{ courseId: string; studentIds: string[]; totalStudents: number }> {
+    this._assertAdmin(user);
     return this.spacedRepetitionService.getStudentsWithSchedules(courseId);
   }
 
@@ -128,12 +181,14 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async bulkUpdateExamPrepMode(
+    @CurrentUser() user: IUser,
     @Body() body: BulkExamPrepBody,
   ): Promise<BulkExamPrepResponse> {
+    this._assertAdmin(user);
     const { studentIds, courseId, enabled } = body;
     return this.spacedRepetitionService.bulkUpdateExamPrepMode(
-      studentIds, 
-      courseId, 
+      studentIds,
+      courseId,
       enabled
     ) as unknown as Promise<BulkExamPrepResponse>;
   }
@@ -157,10 +212,12 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async submitReview(
+    @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
     @Body() body: SubmitReviewBody,
   ): Promise<ReviewItemResponse> {
     const { studentId } = params;
+    this._assertCanActOnStudent(user, studentId);
     const { questionId, quality, selectedOptionIndices } = body;
     const result = await this.spacedRepetitionService.submitReview(
       studentId,
@@ -185,9 +242,11 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async getSchedule(
+    @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
   ): Promise<ReviewItemResponse[]> {
     const { studentId } = params;
+    this._assertCanActOnStudent(user, studentId);
     return this.spacedRepetitionService.getSchedule(studentId) as unknown as Promise<ReviewItemResponse[]>;
   }
 
@@ -205,9 +264,11 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async getCourseRetention(
+    @CurrentUser() user: IUser,
     @Params() params: StudentCourseParams,
   ): Promise<CourseRetentionResponse> {
     const { studentId, courseId } = params;
+    this._assertCanActOnStudent(user, studentId);
     return this.spacedRepetitionService.getCourseRetention(studentId, courseId) as unknown as Promise<CourseRetentionResponse>;
   }
 
@@ -225,10 +286,12 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async updateNotificationPreference(
+    @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
     @Body() body: UpdateOptOutBody,
   ): Promise<UpdateOptOutResponse> {
     const { studentId } = params;
+    this._assertCanActOnStudent(user, studentId);
     const { courseId, optOut } = body;
     return this.spacedRepetitionService.updateNotificationPreference(studentId, courseId, optOut);
   }
@@ -246,9 +309,11 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async resetReview(
+    @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
     @Body() body: ResetReviewBody,
   ): Promise<ResetResponse> {
+    this._assertAdmin(user);
     const { studentId } = params;
     const { questionId } = body;
     return this.spacedRepetitionService.resetReview(studentId, questionId);
@@ -269,9 +334,11 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async boostReview(
+    @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
     @Body() body: BoostReviewBody,
   ): Promise<BoostResponse> {
+    this._assertAdmin(user);
     const { studentId } = params;
     const { questionId, targetEF } = body;
     return this.spacedRepetitionService.boostReview(studentId, questionId, targetEF);
@@ -292,9 +359,11 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async setRemediationHint(
+    @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
     @Body() body: SetRemediationHintBody,
   ): Promise<SetRemediationHintResponse> {
+    this._assertAdmin(user);
     const { studentId } = params;
     const { questionId, hint } = body;
     return this.spacedRepetitionService.setRemediationHint(
@@ -320,8 +389,10 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async getStudentSRStatus(
+    @CurrentUser() user: IUser,
     @Param('studentId') studentId: string,
   ): Promise<StudentSRStatusResponse> {
+    this._assertCanActOnStudent(user, studentId);
     const sr_disabled =
       await this.spacedRepetitionService.getStudentSRStatus(studentId);
     return { studentId, sr_disabled };
@@ -343,9 +414,11 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async setStudentSRDisabled(
+    @CurrentUser() user: IUser,
     @Param('studentId') studentId: string,
     @Body() body: SetStudentSRDisabledBody,
   ): Promise<SetStudentSRDisabledResponse> {
+    this._assertAdmin(user);
     const { sr_disabled } = body;
     const result = await this.spacedRepetitionService.setStudentSRStatus(
       studentId,
@@ -374,8 +447,10 @@ class SpacedRepetitionController {
     statusCode: 200,
   })
   async bulkSetStudentSRDisabled(
+    @CurrentUser() user: IUser,
     @Body() body: BulkSetStudentSRDisabledBody,
   ): Promise<BulkSetStudentSRDisabledResponse> {
+    this._assertAdmin(user);
     const { studentIds, sr_disabled } = body;
     const result = await this.spacedRepetitionService.bulkSetStudentSRStatus(
       studentIds,
@@ -398,8 +473,10 @@ class SpacedRepetitionController {
   @Get('/courses/:courseId/assignable-questions')
   @ResponseSchema(GetAssignableQuestionsResponse)
   async getAssignableQuestions(
+    @CurrentUser() user: IUser,
     @Params() params: CourseIdParam,
   ): Promise<GetAssignableQuestionsResponse> {
+    this._assertAdmin(user);
     const questions =
       await this.spacedRepetitionService.getAssignableQuestions(
         params.courseId,
@@ -427,9 +504,11 @@ class SpacedRepetitionController {
   @HttpCode(200)
   @ResponseSchema(AssignReviewResponse)
   async assignReview(
+    @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
     @Body() body: AssignReviewBody,
   ): Promise<AssignReviewResponse> {
+    this._assertAdmin(user);
     return this.spacedRepetitionService.assignReview(
       params.studentId,
       body.questionId,

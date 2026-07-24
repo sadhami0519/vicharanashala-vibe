@@ -8,6 +8,20 @@ import { NOTIFICATIONS_TYPES } from '../../notifications/types.js';
 import { NotificationService } from '../../notifications/services/NotificationService.js';
 
 /**
+ * Per-student cap on due items considered per notification tick.
+ *
+ * A student who has accumulated 1000+ due items is almost certainly
+ * in a clock-drift or seed-loop edge case; sending 1000 items' worth
+ * of dedup'd course IDs into one notification is wasteful. 200 is
+ * generous (a focused course has ~50-100 questions) while still
+ * bounding per-student work.
+ *
+ * Audit B3 fix: without this, a heavy user could trigger pathological
+ * work per tick. The cap also bounds the dedup'd course set size.
+ */
+const PER_STUDENT_NOTIFICATION_CAP = 200;
+
+/**
  * Groups an array of due ReviewItems by student_id.
  * Each student gets one notification listing all their due questions,
  * rather than one notification per question.
@@ -56,7 +70,13 @@ export function scheduleReviewNotificationJob(): void {
         );
 
         const now = new Date();
-        const allDueItems = await reviewItemRepo.findDueItems(now);
+        // N2: push the notification_opt_out filter into the Mongo
+        // query. The cron no longer pulls items it will immediately
+        // discard. The repository handles the $ne:true semantics;
+        // docs that pre-date the field default to "not opted out".
+        const allDueItems = await reviewItemRepo.findDueItems(now, undefined, undefined, {
+          excludeOptedOut: true,
+        });
 
         // Knob 6 (Phase C, 2026-07-21): drop items whose student has SR
         // disabled entirely. Bulk-read the user flags in one round trip
@@ -71,10 +91,10 @@ export function scheduleReviewNotificationJob(): void {
           distinctStudentIds,
         );
 
-        // Filter out students who have opted out of notifications OR have
-        // SR disabled entirely by a teacher.
+        // Filter out students who have SR disabled entirely by a teacher.
+        // (N2: the notification_opt_out filter is now upstream in the
+        // Mongo query — allDueItems already excludes opted-out items.)
         const notifiableItems = allDueItems.filter(item => {
-          if (item.notification_opt_out) return false;
           if (disabledMap.get(item.student_id) === true) return false;
           return true;
         });
@@ -85,6 +105,18 @@ export function scheduleReviewNotificationJob(): void {
         }
 
         const grouped = groupByStudent(notifiableItems);
+
+        // B3: cap per-student items to PER_STUDENT_NOTIFICATION_CAP
+        // before they reach the notification path. Sort most-overdue
+        // first so the most-neglected cards are surfaced.
+        for (const [studentId, studentItems] of grouped) {
+          if (studentItems.length <= PER_STUDENT_NOTIFICATION_CAP) continue;
+          studentItems.sort(
+            (a, b) =>
+              a.next_review_at.getTime() - b.next_review_at.getTime(),
+          );
+          studentItems.length = PER_STUDENT_NOTIFICATION_CAP;
+        }
 
         console.log(
           `📬 Sending review notifications to ${grouped.size} student(s) ` +

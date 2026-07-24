@@ -37,12 +37,21 @@ class StudentSRStatusRepository {
   /**
    * Read the SR-disabled flag for one student.
    * Returns `false` when the flag is unset (default = enabled).
+   *
+   * Opt-in `session` parameter so callers running inside a MongoDB
+   * transaction can fold the read into the same snapshot as their
+   * writes. This closes the race window where a concurrent
+   * setStatus() could disable SR between the read and the write
+   * (audit finding B2).
    */
-  async getStatus(studentId: string): Promise<boolean> {
+  async getStatus(
+    studentId: string,
+    session?: ClientSession,
+  ): Promise<boolean> {
     await this.init();
     const doc = await this.usersCollection.findOne(
       { firebaseUID: studentId },
-      { projection: { sr_disabled: 1 } },
+      { projection: { sr_disabled: 1 }, ...(session ? { session } : {}) },
     );
     return Boolean(doc?.sr_disabled);
   }
