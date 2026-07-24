@@ -41,6 +41,7 @@ import {
   SPACED_REPETITION_INFO_TITLE,
   SpacedRepetitionInfoBody,
 } from '@/components/spaced-repetition-info';
+import { GoldenButton } from '@/app/components/GoldenButton';
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -361,7 +362,9 @@ export default function RetentionDashboard() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto mt-6 space-y-6">
+    <>
+      <GoldenButton />
+      <div className="max-w-4xl mx-auto mt-6 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
@@ -529,5 +532,6 @@ export default function RetentionDashboard() {
         </Card>
       </section>
     </div>
+    </>
   );
 }
