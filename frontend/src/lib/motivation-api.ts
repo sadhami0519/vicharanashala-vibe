@@ -19,6 +19,8 @@ import {
   MentorViewResponse,
   MotivationMeResponse,
   NextBadgeProximity,
+  OptOutResponse,
+  OptOutResult,
   StatusSnapshot,
 } from '../types/motivation.types';
 import { DEMO_STUDENT_ID, isDemoStudentEmail } from './spaced-repetition-api';
@@ -33,11 +35,11 @@ import { DEMO_STUDENT_ID, isDemoStudentEmail } from './spaced-repetition-api';
 export const USE_MOTIVATION_MOCK = true;
 
 /**
- * localStorage key. Not used in v1 (motivation is read-only — no
- * mutations to persist). Set up so v1.1 can add cross-side
- * reflection without a breaking change.
+ * localStorage key. Used to persist mock opt-out state across page
+ * reloads. Bumped to v2 alongside Pillar 3 so the opt-out state is
+ * fresh on first load (no v1 schema to migrate).
  */
-export const MOCK_MOTIVATION_STORAGE_KEY = 'vibe_motivation_mock_v1';
+export const MOCK_MOTIVATION_STORAGE_KEY = 'vibe_motivation_mock_v2';
 
 // ── Identity helpers (re-exported for the consuming UI) ────────────────────
 
@@ -449,6 +451,69 @@ const MOCK_MENTOR_VIEW: MentorViewResponse = {
   ],
 };
 
+// ── Mock opt-out state (Pillar 3) ────────────────────────────────────────────
+
+/**
+ * Storage shape for the mock opt-out state. We persist to
+ * localStorage so refreshes preserve the user's choice — same
+ * pattern as `spaced-repetition-api.ts`'s `vibe_sr_mock_v2`.
+ *
+ * Format: `{ [courseId]: string[] }` where each courseId maps to
+ * the list of studentIds opted out of that course's leaderboard.
+ * Equivalent in shape to `OptOutRepository.getOptOutsForCourse`
+ * bulk-fetched per course on the backend.
+ */
+type MockOptOutState = Record<string, string[]>;
+
+/**
+ * In-memory cache, hydrated from localStorage at module load.
+ * Empty object if storage is missing or malformed — fail-open.
+ */
+let mockOptOutState: MockOptOutState = {};
+
+try {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const raw = window.localStorage.getItem(MOCK_MOTIVATION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as MockOptOutState;
+      if (parsed && typeof parsed === 'object') {
+        mockOptOutState = parsed;
+      }
+    }
+  }
+} catch {
+  // Fail-open: leave `mockOptOutState = {}` so the demo doesn't
+  // crash on storage errors (private mode, quota, etc.).
+}
+
+/** Persist current state to localStorage. Best-effort. */
+function persistOptOutState(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(
+      MOCK_MOTIVATION_STORAGE_KEY,
+      JSON.stringify(mockOptOutState),
+    );
+  } catch {
+    // Storage full / disabled — keep going. Demo never blocks on this.
+  }
+}
+
+/**
+ * Returns the list of studentIds opted out of a course's leaderboard.
+ * Mock-only — mirrors `OptOutRepository.getOptOutsForCourse`.
+ */
+function mockGetOptOutsForCourse(courseId: string): string[] {
+  return mockOptOutState[courseId] ?? [];
+}
+
+/**
+ * NOTE: `mockGetOptOutsForStudent` and `mockIsOptedOut` are
+ * trivial derivations of `mockGetOptOutsForCourse` and not yet
+ * consumed by the UI. If the banner needs them later (e.g. to
+ * show "you're opted out of N courses"), add them back here.
+ */
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /**
@@ -482,10 +547,21 @@ export async function getMyMotivation(
 /**
  * Returns the course-scoped leaderboard. Empty response for
  * unknown / empty course IDs.
+ *
+ * In mock-land, applies the persisted opt-out state on the fly:
+ *   - `isOptedOut: true` for opted-out students
+ *   - `rank: null` for opted-out students (sinks to bottom)
+ *   - `currentUserRank` recomputed to reflect the re-sort
+ *
+ * Mirrors the backend's behaviour in `MotivationController
+ * .getCourseLeaderboard` (which calls `getOptOutsForCourse`
+ * and recomputes rank from the surviving non-opted-out set).
+ * The mock keeps `MOCK_LEADERBOARD` as the static snapshot of
+ * the unranked roster, then derives the live view at call time.
  */
 export async function getCourseLeaderboard(
   courseId: string,
-  _studentId: string,
+  studentId: string,
 ): Promise<LeaderboardResponse> {
   if (!courseId) {
     return {
@@ -498,10 +574,10 @@ export async function getCourseLeaderboard(
   }
   if (USE_MOTIVATION_MOCK) {
     await new Promise((r) => setTimeout(r, 50));
-    return MOCK_LEADERBOARD;
+    return deriveMockLeaderboard(courseId, studentId);
   }
   const res = await fetch(
-    `/api/motivation/courses/${courseId}/leaderboard?studentId=${encodeURIComponent(_studentId)}`,
+    `/api/motivation/courses/${courseId}/leaderboard?studentId=${encodeURIComponent(studentId)}`,
   );
   if (!res.ok) {
     return {
@@ -513,6 +589,97 @@ export async function getCourseLeaderboard(
     };
   }
   return res.json();
+}
+
+/**
+ * Mock-only derivation of the live leaderboard view from the
+ * static `MOCK_LEADERBOARD` + persisted opt-out state.
+ *
+ * Algorithm:
+ *   1. Take the static roster (5 students in `mock-course-1`).
+ *   2. Mark opted-out students (`isOptedOut: true`).
+ *   3. Split into ranked vs opted-out.
+ *   4. Ranked: sort by `retention30d` desc, assign `rank` 1..N.
+ *   5. Opted-out: sink to bottom, `rank: null`.
+ *   6. `currentUserRank` is the rank of `studentId` in the
+ *      ranked set, or `null` if the current user is opted out
+ *      or not on the leaderboard.
+ *   7. `currentUserPercentile` mirrors the static mock (the
+ *      demo cohort is small enough that the percentile only
+ *      meaningfully shifts when an entry leaves/joins, which
+ *      isn't the demo's purpose).
+ *
+ * Exported for shared use by tests + UI consumers that need to
+ * re-derive without going through the async API.
+ */
+export function deriveMockLeaderboard(
+  courseId: string,
+  studentId: string,
+): LeaderboardResponse {
+  // For mock-cohort: we know MOCK_LEADERBOARD.courseId is fixed.
+  // For other courseIds, return an empty shell.
+  if (courseId !== MOCK_LEADERBOARD.courseId) {
+    return {
+      courseId,
+      entries: [],
+      currentUserRank: null,
+      currentUserPercentile: null,
+      totalStudents: 0,
+    };
+  }
+
+  const optedOutIds = new Set(mockGetOptOutsForCourse(courseId));
+  const baseRoster = MOCK_LEADERBOARD.entries;
+
+  // Mark opted-out flag on the base roster (don't drop yet).
+  const flagged = baseRoster.map((entry) => ({
+    ...entry,
+    isCurrentUser: entry.studentId === studentId,
+    isOptedOut: optedOutIds.has(entry.studentId),
+  }));
+
+  // Partition.
+  const ranked = flagged
+    .filter((e) => !e.isOptedOut)
+    .slice()
+    .sort((a, b) => (b.retention30d ?? -1) - (a.retention30d ?? -1));
+  const optedOut = flagged.filter((e) => e.isOptedOut);
+
+  // Assign ranks.
+  const rankedWithRank = ranked.map((entry, idx) => ({
+    ...entry,
+    rank: idx + 1,
+  }));
+
+  // Opted-out sink to bottom, rank: null.
+  const optedOutWithRank = optedOut.map((entry) => ({
+    ...entry,
+    rank: null,
+  }));
+
+  const entries = [...rankedWithRank, ...optedOutWithRank];
+
+  // Compute currentUserRank from the ranked set (null if
+  // opted-out or not present).
+  const currentUserEntry = entries.find((e) => e.isCurrentUser);
+  const currentUserRank =
+    currentUserEntry?.rank ?? null;
+
+  // Percentile: keep the mock's precomputed value when nothing
+  // structural changed (current user is still in the cohort).
+  // When the current user opts out, force null — same as backend.
+  const currentUserPercentile =
+    currentUserRank === null
+      ? null
+      : MOCK_LEADERBOARD.currentUserPercentile;
+
+  return {
+    courseId,
+    entries,
+    currentUserRank,
+    currentUserPercentile,
+    totalStudents: flagged.length,
+  };
 }
 
 /**
@@ -544,6 +711,161 @@ export async function getCourseMentorView(
     };
   }
   return res.json();
+}
+
+// ── Opt-out mutation (Pillar 3) ─────────────────────────────────────────────
+
+/**
+ * PATCH `/api/motivation/students/:studentId/courses/:courseId/opt-out`.
+ *
+ * Self-only on the backend — the controller's `_assertSelfOnly`
+ * guard rejects admin/teacher overrides. Frontend mirrors this
+ * by trusting the backend's 403 if it ever fires (the UI never
+ * constructs a mutation for a non-self student, but defense in
+ * depth).
+ *
+ * Threshold gate (only when `optedOut = true`):
+ *   - 30-day retention ≥ 90%
+ *   - ≥ 100 reviews in last 30 days
+ *
+ * In mock-land: we hard-code the demo student as "above the bar"
+ * (their `retention30d` is 91% — already on the seeded leaderboard
+ * with that value). The `setOptOut` mock returns success without
+ * checking; the UI banner (checkpoint 5) shows the threshold copy
+ * statically when the user clicks "Step off", so the demo
+ * narrative is: "you qualify → click → you've stepped off".
+ * Threshold-gate failure paths are exercised by real-backend
+ * integration (out of scope for the demo).
+ *
+ * Returns `OptOutResult` (a discriminated union). The hook layer
+ * converts this into TanStack Query's `error` field so callers
+ * can toast the failure reason.
+ */
+export async function setOptOut(
+  studentId: string,
+  courseId: string,
+  optedOut: boolean,
+): Promise<OptOutResult> {
+  if (!studentId || !courseId) {
+    return {
+      ok: false,
+      error: { status: 403, reason: 'Missing studentId or courseId' },
+    };
+  }
+  if (USE_MOTIVATION_MOCK) {
+    await new Promise((r) => setTimeout(r, 50));
+    return mockSetOptOut(studentId, courseId, optedOut);
+  }
+  const res = await fetch(
+    `/api/motivation/students/${encodeURIComponent(studentId)}/courses/${encodeURIComponent(courseId)}/opt-out`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optedOut }),
+    },
+  );
+  if (!res.ok) {
+    // Try to parse a backend reason string; fall back to generic.
+    let reason = `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) reason = body.message;
+    } catch {
+      // Body wasn't JSON — keep generic.
+    }
+    return {
+      ok: false,
+      error: { status: res.status, reason },
+    };
+  }
+  const response = (await res.json()) as OptOutResponse;
+  return { ok: true, response };
+}
+
+/**
+ * Mock implementation of `setOptOut`. Persists to localStorage so
+ * the choice survives reloads. Returns a discriminated-union
+ * `OptOutResult` mirroring the real endpoint's contract.
+ *
+ * Idempotency semantics (matches `OptOutRepository.setOptOut`):
+ *   - `optedOut = true` on a not-yet-opted-out student:
+ *       inserts the studentId into the course's array,
+ *       returns `{ ok: true, response: { changed: true, optedOutAt: <new Date> } }`.
+ *   - `optedOut = true` on an already-opted-out student:
+ *       no-op on the array, returns `{ ok: true, response: { changed: false,
+ *       optedOutAt: <existing or new Date> } }`.
+ *   - `optedOut = false` on a currently-opted-out student:
+ *       removes the studentId from the array,
+ *       returns `{ ok: true, response: { changed: true, optedOutAt: null } }`.
+ *   - `optedOut = false` on a not-opted-out student:
+ *       no-op, returns `{ ok: true, response: { changed: false, optedOutAt: null } }`.
+ *
+ * The `changed` semantics here match the backend's contract
+ * (`upsertedCount > 0` for opt-in; `deletedCount > 0` for opt-out).
+ */
+function mockSetOptOut(
+  studentId: string,
+  courseId: string,
+  optedOut: boolean,
+): OptOutResult {
+  const current = mockOptOutState[courseId] ?? [];
+  if (optedOut) {
+    if (current.includes(studentId)) {
+      // No-op: already opted out. Refresh timestamp.
+      return {
+        ok: true,
+        response: {
+          studentId,
+          courseId,
+          optedOut: true,
+          changed: false,
+          optedOutAt: new Date(),
+        },
+      };
+    }
+    mockOptOutState = {
+      ...mockOptOutState,
+      [courseId]: [...current, studentId],
+    };
+    persistOptOutState();
+    return {
+      ok: true,
+      response: {
+        studentId,
+        courseId,
+        optedOut: true,
+        changed: true,
+        optedOutAt: new Date(),
+      },
+    };
+  }
+  if (!current.includes(studentId)) {
+    return {
+      ok: true,
+      response: {
+        studentId,
+        courseId,
+        optedOut: false,
+        changed: false,
+        optedOutAt: null,
+      },
+    };
+  }
+  mockOptOutState = {
+    ...mockOptOutState,
+    [courseId]: current.filter((id) => id !== studentId),
+  };
+  persistOptOutState();
+  return {
+    ok: true,
+    response: {
+      studentId,
+      courseId,
+      optedOut: false,
+      changed: true,
+      optedOutAt: null,
+    },
+  };
 }
 
 // ── Pure helper (also exported for shared use) ─────────────────────────────

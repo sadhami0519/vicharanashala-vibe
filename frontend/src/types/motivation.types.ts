@@ -193,3 +193,53 @@ export interface MotivationMeResponse {
   badges: BadgeProgress[];
   status: StatusSnapshot[];
 }
+
+// ── Opt-out (Pillar 3) ──────────────────────────────────────────────────────
+
+/**
+ * Shape of `PATCH /api/motivation/students/:studentId/courses/:courseId/opt-out`.
+ *
+ * Mirrors `IMotivation.OptOutResponse` on the backend exactly:
+ *   - `optedOut` reflects the requested final state (true = now opted out)
+ *   - `changed` is `true` iff the user's opt-out state transitioned —
+ *     i.e. the doc was newly created (first opt-in) or removed
+ *     (first opt-out-of-an-opt-out). Repeated ops that just refresh
+ *     the timestamp report `changed: false`. Used to decide whether
+ *     to toast "you've opted out" vs "you were already opted out".
+ *   - `optedOutAt` is the timestamp of the upserted doc on opt-in;
+ *     `null` on opt-out (the doc no longer exists).
+ *
+ * The mutation is idempotent — same body twice returns the same
+ * payload with `changed: false` on the second call.
+ */
+export interface OptOutResponse {
+  studentId: string;
+  courseId: string;
+  optedOut: boolean;
+  changed: boolean;
+  optedOutAt: Date | null;
+}
+
+/**
+ * Error shape when the threshold gate blocks an opt-in attempt
+ * (HTTP 403) or any other request failure (HTTP 404 if the
+ * student/course pair doesn't exist, 5xx for transient backend
+ * failures). The `reason` is human-readable — the backend
+ * surfaces the actual current value (e.g. "currently 78") so the
+ * UI can show "you have 78 of 100 reviews" rather than a generic
+ * "you don't qualify".
+ */
+export interface OptOutError {
+  status: number;
+  reason: string;
+}
+
+/**
+ * Thin discriminated union used by the API layer to surface
+ * threshold-gate failures without throwing. The hook layer
+ * converts this into a TanStack Query `error`.
+ */
+export type OptOutResult =
+  | { ok: true; response: OptOutResponse }
+  | { ok: false; error: OptOutError };
+

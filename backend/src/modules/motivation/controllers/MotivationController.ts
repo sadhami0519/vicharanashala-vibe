@@ -2,6 +2,8 @@ import { injectable, inject } from 'inversify';
 import {
   JsonController,
   Get,
+  Patch,
+  Body,
   Params,
   ForbiddenError,
   HttpCode,
@@ -14,7 +16,7 @@ import { OpenAPI } from 'routing-controllers-openapi';
 import { SPACED_REPETITION_TYPES } from '../../spacedRepetition/types.js';
 import { ReviewItemRepository } from '../../spacedRepetition/repositories/providers/mongodb/ReviewItemRepository.js';
 import { MOTIVATION_TYPES } from '../types.js';
-import { UserDirectoryRepository } from '../repositories/index.js';
+import { UserDirectoryRepository, OptOutRepository } from '../repositories/index.js';
 import { IUser } from '#root/shared/interfaces/models.js';
 import {
   computeBadgeProgress,
@@ -22,16 +24,20 @@ import {
   computeRetention30d,
   computeLearnerCategory,
   computeNextBadgeProximity,
+  evaluateOptOutEligibility,
 } from '../services/MotivationService.js';
 import {
   StudentIdParam,
   LeaderboardQuery,
   MentorViewQuery,
+  StudentCoursePathParam,
+  OptOutBody,
 } from '../classes/validators/MotivationValidator.js';
 import {
   LeaderboardResponse,
   MentorViewResponse,
   MotivationResponse,
+  OptOutResponse,
 } from '../interfaces/IMotivation.js';
 import { IReviewItem } from '../../spacedRepetition/interfaces/IReviewItem.js';
 
@@ -44,6 +50,8 @@ export class MotivationController {
     private readonly reviewItemRepo: ReviewItemRepository,
     @inject(MOTIVATION_TYPES.UserDirectoryRepo)
     private readonly userDirectoryRepo: UserDirectoryRepository,
+    @inject(MOTIVATION_TYPES.OptOutRepo)
+    private readonly optOutRepo: OptOutRepository,
   ) {}
 
   // ── Self-or-admin guard ─────────────────────────────────────────────────
@@ -62,6 +70,26 @@ export class MotivationController {
     if (!user.roles?.includes('admin')) {
       throw new ForbiddenError(
         'Motivation overview endpoints require an admin or teacher role',
+      );
+    }
+  }
+
+  /**
+   * Stricter than `_assertCanActOnStudent`: refuses admins from
+   * flipping another student's leaderboard opt-out. Per Pillar 3
+   * of PLAN_MOTIVATION_SYSTEM.md, the opt-out is the student's
+   * own right — only they can opt themselves in or out of a
+   * leaderboard. Teachers observing the dashboard don't get to
+   * override it.
+   *
+   * Differs from `_assertCanActOnStudent`:
+   *   - that one permits admin read access to any student's data
+   *   - this one permits NOTHING but the self-only case
+   */
+  private _assertSelfOnly(user: IUser, studentId: string): void {
+    if (user.firebaseUID !== studentId) {
+      throw new ForbiddenError(
+        'Leaderboard opt-out can only be changed by the student themselves',
       );
     }
   }
@@ -109,6 +137,11 @@ export class MotivationController {
     this._assertAdmin(user);
     const students = await this.reviewItemRepo.getDistinctStudentsForCourse(courseId);
     const nameMap = await this.userDirectoryRepo.getDisplayNamesByFirebaseUIDs(students);
+    // Pillar 3 (2026-07-25): bulk-fetch the opted-out studentIds for this
+    // course in a single Mongo round-trip. Used to populate `isOptedOut`
+    // on each row. Previously hardcoded `false` — opted-out flag was
+    // defined in the interface but never wired through storage.
+    const optedOutSet = await this.optOutRepo.getOptOutsForCourse(courseId);
 
     const rows = await Promise.all(
       students.map(async (studentId) => {
@@ -130,7 +163,7 @@ export class MotivationController {
           studentId,
           retention30d,
           coverage,
-          isOptedOut: false,
+          isOptedOut: optedOutSet.has(studentId),
           studentName: nameMap.get(studentId) ?? studentId,
           isCurrentUser: studentId === user.firebaseUID,
           rank: null,
@@ -277,5 +310,85 @@ export class MotivationController {
     );
 
     return { stuckCards, nextBadges, learnerCategories };
+  }
+
+  // ── PATCH /motivation/students/:studentId/courses/:courseId/opt-out ──
+
+  /**
+   * Threshold gate for Pillar 3 opt-out eligibility, delegated to the
+   * pure helper `evaluateOptOutEligibility` in `MotivationService.ts`.
+   * That helper is testable in isolation; this method only adds the
+   * I/O (fetch the items) and keeps the controller thin.
+   *
+   * Per `PLAN_MOTIVATION_SYSTEM.md`:
+   *   "Opt-out available if 30-day retention ≥ 90% AND reviews in 30-day
+   *    window ≥ 100."
+   *
+   * Re-evaluated on every PATCH call (server-side, fresh computation).
+   * Sticky opt-out: dropping below the bar after opting out does NOT
+   * auto-rejoin — the gate is at opt-in time only.
+   */
+  private async _evaluateOptOutEligibility(
+    studentId: string,
+    courseId: string,
+  ): Promise<{ eligible: true } | { eligible: false; reason: string }> {
+    const items = await this.reviewItemRepo.findByStudentAndCourse(
+      studentId,
+      courseId,
+    );
+    return evaluateOptOutEligibility(items);
+  }
+
+  @OpenAPI({
+    summary: 'Opt a student in or out of a course leaderboard',
+    description: `Per Pillar 3 of PLAN_MOTIVATION_SYSTEM.md: high-retention
+    students (30-day retention ≥ 90% AND ≥ 100 reviews in the last 30
+    days) can opt out of a course's leaderboard per course. Self-only:
+    the authenticated user must match the :studentId path param.
+    Threshold is re-evaluated on every request; sticky opt-out means
+    dropping below the bar does NOT auto-rejoin. Idempotent.`,
+  })
+  @Authorized()
+  @Patch('/students/:studentId/courses/:courseId/opt-out')
+  @HttpCode(200)
+  async setCourseOptOut(
+    @CurrentUser() user: IUser,
+    @Params() params: StudentCoursePathParam,
+    @Body() body: OptOutBody,
+  ): Promise<OptOutResponse> {
+    this._assertSelfOnly(user, params.studentId);
+
+    // Opting BACK IN: no threshold gate. The bar is at opt-in time.
+    // Opting OUT: threshold gate (per spec). Evaluating only when
+    // `body.optedOut === true` keeps the come-back path frictionless.
+    if (body.optedOut) {
+      const eligibility = await this._evaluateOptOutEligibility(
+        params.studentId,
+        params.courseId,
+      );
+      // Type guard the discriminated union explicitly. TS sometimes
+      // doesn't narrow across the await boundary when the predicate
+      // is `!eligible.eligible`; reading the boolean first into a
+      // const narrows reliably.
+      if (eligibility.eligible === false) {
+        throw new ForbiddenError(
+          `Cannot opt out: ${eligibility.reason}`,
+        );
+      }
+    }
+
+    const { changed, optedOutAt } = await this.optOutRepo.setOptOut(
+      params.studentId,
+      params.courseId,
+      body.optedOut,
+    );
+
+    return {
+      studentId: params.studentId,
+      courseId: params.courseId,
+      optedOut: body.optedOut,
+      changed,
+      optedOutAt,
+    };
   }
 }

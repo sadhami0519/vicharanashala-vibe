@@ -604,3 +604,67 @@ export function getBadgesByTier(): Record<BadgeTier, Badge[]> {
 export function getBadgeById(id: string): Badge | undefined {
   return BADGE_CATALOGUE.find((b) => b.id === id);
 }
+
+// ── Pillar 3: opt-out eligibility ──────────────────────────────────────────
+
+/**
+ * Pure computation of whether a student is eligible to opt out of a
+ * course's leaderboard, given their flat list of `IReviewItem` for
+ * that course.
+ *
+ * Per `PLAN_MOTIVATION_SYSTEM.md`:
+ *   "Opt-out available if 30-day retention ≥ 90% AND reviews in 30-day
+ *    window ≥ 100."
+ *
+ * Re-evaluated on every PATCH call (server-side, fresh computation).
+ * Sticky opt-out: dropping below the bar after opting out does NOT
+ * auto-rejoin — the gate is at opt-in time only.
+ *
+ * Default-on for new students: if the student has no review_items
+ * for this course (no retention data), they are not eligible because
+ * the spec says they "cannot opt out" until they meet the threshold.
+ * The `reviews30d >= 100` check naturally covers this — zero reviews
+ * is below the bar.
+ *
+ * @returns { eligible: true } if both gates pass; { eligible: false,
+ *   reason: string } otherwise. The reason is a human-readable string
+ *   the controller surfaces in the 403 message.
+ *
+ * Note: pure on the input list — no `Date.now()` so tests are
+ * deterministic. The caller passes `now` explicitly so the window
+ * is stable.
+ */
+export function evaluateOptOutEligibility(
+  items: IReviewItem[],
+  now: Date = new Date(),
+): { eligible: true } | { eligible: false; reason: string } {
+  const cutoff = new Date(now.getTime() - 30 * MS_PER_DAY);
+
+  // 30-day review count: items whose `last_reviewed_at` is in the
+  // window. Mirrors the spaced-repetition cron's day-window math.
+  const reviewsLast30d = items.filter((i) => {
+    if (!i.last_reviewed_at) return false;
+    const t =
+      i.last_reviewed_at instanceof Date
+        ? i.last_reviewed_at.getTime()
+        : new Date(i.last_reviewed_at).getTime();
+    return t >= cutoff.getTime();
+  }).length;
+
+  if (reviewsLast30d < 100) {
+    return {
+      eligible: false,
+      reason: `Need at least 100 reviews in the last 30 days (currently ${reviewsLast30d})`,
+    };
+  }
+
+  const retention30d = computeRetention30d(items);
+  if (retention30d === null || retention30d < 90) {
+    return {
+      eligible: false,
+      reason: `Need 30-day retention ≥ 90% (currently ${retention30d ?? 0}%)`,
+    };
+  }
+
+  return { eligible: true };
+}
