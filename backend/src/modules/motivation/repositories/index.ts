@@ -1,0 +1,1 @@
+export { UserDirectoryRepository } from './providers/mongodb/index.js';
