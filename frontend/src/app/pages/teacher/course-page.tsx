@@ -1450,19 +1450,6 @@ function VersionCard({
     storePageAndNavigate("/teacher/courses/student-questions")
   }
 
-  const viewInstructors = () => {
-    // Set course info in store and navigate to instructors page
-    setCurrentCourse({
-      courseId: courseId,
-      versionId: selectedVersionId ? selectedVersionId : null,
-      moduleId: null,
-      sectionId: null,
-      itemId: null,
-      watchItemId: null,
-    })
-    storePageAndNavigate("/teacher/courses/instructors")
-  }
-
   const viewMentors = () => {
     // Pillar 4 / Decision 4 — admin-only mentor management.
     // The destination page enforces the admin role check and
