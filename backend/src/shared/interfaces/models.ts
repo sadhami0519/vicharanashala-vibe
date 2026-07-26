@@ -49,6 +49,16 @@ export interface ICourse {
   description: string;
   versions: ID[];
   instructors: ID[];
+  /**
+   * Course mentors — users who can view the motivation system's
+   * Pillar 4 mentor view for this course even if they are not in
+   * `instructors`. Added/removed via PATCH /api/courses/:courseId/mentors
+   * (admin-only). Default `[]` when absent — legacy courses are still
+   * accessible to instructors via the helper's `instructors ∪ mentorIds`
+   * logic, so no backfill is required. See
+   * PLAN_MOTIVATION_DECISION4_MENTORIDS.md for the spec.
+   */
+  mentorIds?: ID[];
   createdAt?: Date;
   updatedAt?: Date;
   isDeleted?: boolean;

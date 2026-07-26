@@ -72,6 +72,19 @@ class UserDirectoryRepository {
     }
     return map;
   }
+
+  /**
+   * Look up a single user by `firebaseUID`. Returns the full `IUser`
+   * doc (or null when not found). Used by the mentor-view gate to
+   * resolve the auth identity to the Mongo `_id` that
+   * `course.instructors` / `course.mentorIds` actually store.
+   * Added 2026-07-25 for Pillar 4 locked decision 4.
+   */
+  async findByFirebaseUID(firebaseUID: string): Promise<IUser | null> {
+    if (!firebaseUID) return null;
+    await this.init();
+    return this.usersCollection.findOne({ firebaseUID });
+  }
 }
 
 export { UserDirectoryRepository };

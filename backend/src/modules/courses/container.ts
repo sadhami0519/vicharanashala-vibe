@@ -6,6 +6,7 @@ import {CourseVersionController} from './controllers/CourseVersionController.js'
 import {ItemController} from './controllers/ItemController.js';
 import {ModuleController} from './controllers/ModuleController.js';
 import {SectionController} from './controllers/SectionController.js';
+import {CourseMentorController} from './controllers/CourseMentorController.js';
 import {CourseService} from './services/CourseService.js';
 import {CourseVersionService} from './services/CourseVersionService.js';
 import {ItemService} from './services/ItemService.js';
@@ -43,4 +44,5 @@ export const coursesContainerModule = new ContainerModule(options => {
   options.bind(ModuleController).toSelf().inSingletonScope();
   options.bind(SectionController).toSelf().inSingletonScope();
   options.bind(ItemController).toSelf().inSingletonScope();
+  options.bind(CourseMentorController).toSelf().inSingletonScope();
 });

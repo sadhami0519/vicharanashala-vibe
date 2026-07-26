@@ -75,6 +75,25 @@ class Course implements ICourse {
   })
   instructors: ID[];
 
+  /**
+   * Course mentors — separate from `instructors`. Users listed here
+   * can view the motivation system's Pillar 4 mentor view for this
+   * course even if they are not in `instructors`. Admin-managed via
+   * PATCH /api/courses/:courseId/mentors. Default `[]` when absent.
+   * See PLAN_MOTIVATION_DECISION4_MENTORIDS.md.
+   */
+  @Expose()
+  @Transform(ObjectIdArrayToStringArray.transformer, {toPlainOnly: true})
+  @Transform(StringArrayToObjectIdArray.transformer, {toClassOnly: true})
+  @JSONSchema({
+    title: 'Course Mentors',
+    description:
+      'Users who can view the motivation mentor view for this course',
+    type: 'array',
+    items: { type: 'string' },
+  })
+  mentorIds?: ID[];
+
   @Expose()
   @Type(() => Date)
   @JSONSchema({
@@ -105,6 +124,7 @@ class Course implements ICourse {
 
     this.versions = [];
     this.instructors = [];
+    this.mentorIds = [];
     this.createdAt = new Date();
     this.updatedAt = new Date();
   }

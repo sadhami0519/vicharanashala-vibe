@@ -297,6 +297,117 @@ class CourseDataResponse implements ICourse {
   updatedAt?: Date | null;
 }
 
+export class ManageMentorsBody {
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsString({each: true})
+  @JSONSchema({
+    title: 'Mentors to add',
+    description:
+      'Array of user IDs to add to `course.mentorIds`. Duplicates are collapsed by `$addToSet` (idempotent).',
+    example: ['64b7f1f9e4d2f91b7c9a1e23', '64b7f201e4d2f91b7c9a1e24'],
+    type: 'array',
+    items: {type: 'string'},
+  })
+  add?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsString({each: true})
+  @JSONSchema({
+    title: 'Mentors to remove',
+    description:
+      'Array of user IDs to remove from `course.mentorIds`. Missing values are silently ignored (idempotent). If a userId appears in both `add` and `remove`, `remove` wins (later operator).',
+    example: ['64b7f1f9e4d2f91b7c9a1e25'],
+    type: 'array',
+    items: {type: 'string'},
+  })
+  remove?: string[];
+}
+
+export class ManageMentorsResponse {
+  @JSONSchema({
+    description: 'Course ID the mentors were managed for',
+    type: 'string',
+    readOnly: true,
+  })
+  @IsNotEmpty()
+  courseId: string;
+
+  @JSONSchema({
+    description:
+      'The full mentorIds array after the update — reflects the actual persisted state.',
+    example: ['64b7f1f9e4d2f91b7c9a1e23', '64b7f201e4d2f91b7c9a1e24'],
+    type: 'array',
+    readOnly: true,
+    items: {type: 'string'},
+  })
+  @IsArray()
+  mentorIds: string[];
+
+  @JSONSchema({
+    description: 'Echo of the `add` array from the request body',
+    type: 'array',
+    readOnly: true,
+    items: {type: 'string'},
+  })
+  @IsArray()
+  added: string[];
+
+  @JSONSchema({
+    description: 'Echo of the `remove` array from the request body',
+    type: 'array',
+    readOnly: true,
+    items: {type: 'string'},
+  })
+  @IsArray()
+  removed: string[];
+
+  @JSONSchema({
+    description:
+      'Mongo matchedCount — 1 when the course existed and was matched, 0 when missing',
+    example: 1,
+    type: 'number',
+    readOnly: true,
+  })
+  @IsNumber()
+  matchedCount: number;
+
+  @JSONSchema({
+    description:
+      'Mongo modifiedCount — 1 when the mentorIds array actually changed, 0 when the operation was a no-op (empty body or already-correct state)',
+    example: 1,
+    type: 'number',
+    readOnly: true,
+  })
+  @IsNumber()
+  modifiedCount: number;
+}
+
+export class ManageMentorsNotFoundResponse {
+  @JSONSchema({
+    description: 'Course not found error message',
+    example: 'No course found with id 64b7f1f9e4d2f91b7c9a1e23',
+    type: 'string',
+    readOnly: true,
+  })
+  @IsNotEmpty()
+  message: string;
+}
+
+export class ManageMentorsForbiddenResponse {
+  @JSONSchema({
+    description: 'Admin-only error message',
+    example: 'Only admins can manage the course mentor list',
+    type: 'string',
+    readOnly: true,
+  })
+  @IsNotEmpty()
+  message: string;
+}
+
 class CourseNotFoundErrorResponse {
   @JSONSchema({
     description: 'The error message.',
@@ -322,4 +433,8 @@ export const COURSE_VALIDATORS = [
   CourseIdParams,
   CourseDataResponse,
   CourseNotFoundErrorResponse,
+  ManageMentorsBody,
+  ManageMentorsResponse,
+  ManageMentorsNotFoundResponse,
+  ManageMentorsForbiddenResponse,
 ];

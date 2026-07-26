@@ -188,4 +188,44 @@ export interface ICourseRepository {
     id: string,
     session?: ClientSession
   ): Promise<any>;
+
+  /**
+   * Pillar 4 mentor gate. Returns true when the user is either
+   * listed in `course.instructors` or in `course.mentorIds`. Admin
+   * check is at the controller level — this helper is single-purpose.
+   * Returns false when the course is missing or the user is on neither
+   * list. See PLAN_MOTIVATION_DECISION4_MENTORIDS.md.
+   */
+  isMentorOnCourse(
+    userId: string,
+    courseId: string,
+    session?: ClientSession,
+  ): Promise<boolean>;
+
+  /**
+   * Admin-only: add and/or remove user IDs from `course.mentorIds`
+   * in one atomic update. Uses `$addToSet` (deduplicates) and `$pull`
+   * (no-op on missing values). When the same userId appears in both
+   * `add` and `remove`, `remove` wins (later operator in the
+   * $set pipeline). Returns the raw `UpdateResult` so the caller
+   * can inspect `matchedCount` / `modifiedCount`. See
+   * PLAN_MOTIVATION_DECISION4_MENTORIDS.md.
+   */
+  updateMentors(
+    courseId: string,
+    add: string[],
+    remove: string[],
+    session?: ClientSession,
+  ): Promise<UpdateResult>;
+
+  /**
+   * Read just the `mentorIds` array of a course. Returns `string[]`
+   * (stringified user IDs) or `null` when the course is missing.
+   * Used by the admin endpoint to surface the post-update list
+   * without re-fetching the whole course doc.
+   */
+  getMentorIds(
+    courseId: string,
+    session?: ClientSession,
+  ): Promise<string[] | null>;
 }

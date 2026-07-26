@@ -40,6 +40,8 @@ import {
   OptOutResponse,
 } from '../interfaces/IMotivation.js';
 import { IReviewItem } from '../../spacedRepetition/interfaces/IReviewItem.js';
+import { GLOBAL_TYPES } from '#root/types.js';
+import { CourseRepository } from '#root/shared/database/providers/mongo/repositories/CourseRepository.js';
 
 @OpenAPI({ tags: ['Motivation'] })
 @injectable()
@@ -52,6 +54,8 @@ export class MotivationController {
     private readonly userDirectoryRepo: UserDirectoryRepository,
     @inject(MOTIVATION_TYPES.OptOutRepo)
     private readonly optOutRepo: OptOutRepository,
+    @inject(GLOBAL_TYPES.CourseRepo)
+    private readonly courseRepo: CourseRepository,
   ) {}
 
   // ── Self-or-admin guard ─────────────────────────────────────────────────
@@ -72,6 +76,51 @@ export class MotivationController {
         'Motivation overview endpoints require an admin or teacher role',
       );
     }
+  }
+
+  /**
+   * Mentor-view gate (Pillar 4 / Locked decision 4). Permits:
+   *   - admins (role-based; checked first, no Mongo hit)
+   *   - course instructors (via `course.instructors`)
+   *   - users listed in `course.mentorIds` (admin-managed list)
+   * Throws 403 otherwise. See PLAN_MOTIVATION_DECISION4_MENTORIDS.md.
+   */
+  private async _assertMentorOnCourse(
+    user: IUser,
+    courseId: string,
+  ): Promise<void> {
+    if (user.roles?.includes('admin')) {
+      return;
+    }
+    // Map firebaseUID (auth identity) to the user's Mongo _id, which is
+    // what `course.instructors` / `course.mentorIds` actually store.
+    // If the lookup fails we fail closed (403) — never silently grant.
+    const userId = await this._resolveUserId(user);
+    if (!userId) {
+      throw new ForbiddenError(
+        'You must be a course instructor or listed mentor to view this',
+      );
+    }
+    const allowed = await this.courseRepo.isMentorOnCourse(userId, courseId);
+    if (!allowed) {
+      throw new ForbiddenError(
+        'You must be a course instructor or listed mentor to view this',
+      );
+    }
+  }
+
+  /**
+   * Resolve `firebaseUID` (auth identity on the request) to the Mongo
+   * user doc's `_id`. Looks up via the existing userDirectoryRepo so we
+   * share the same role / id mapping the rest of the module uses.
+   * Returns null when no match — caller decides fail-open vs fail-closed.
+   */
+  private async _resolveUserId(user: IUser): Promise<string | null> {
+    if (!user.firebaseUID) return null;
+    const directory = await this.userDirectoryRepo.findByFirebaseUID(
+      user.firebaseUID,
+    );
+    return directory?._id ? String(directory._id) : null;
   }
 
   /**
@@ -218,7 +267,7 @@ export class MotivationController {
     @CurrentUser() user: IUser,
     @QueryParams() query: MentorViewQuery,
   ): Promise<MentorViewResponse> {
-    this._assertAdmin(user);
+    await this._assertMentorOnCourse(user, query.courseId);
     const students = await this.reviewItemRepo.getDistinctStudentsForCourse(
       query.courseId,
     );

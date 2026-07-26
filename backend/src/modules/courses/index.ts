@@ -11,6 +11,7 @@ import {
   ItemController,
   ModuleController,
   SectionController,
+  CourseMentorController,
 } from './controllers/index.js';
 import { usersContainerModule } from '../users/container.js';
 import { quizzesContainerModule } from '../quizzes/container.js';
@@ -32,6 +33,7 @@ export const coursesModuleControllers: Function[] = [
   ModuleController,
   SectionController,
   ItemController,
+  CourseMentorController,
 ];
 
 export async function setupCoursesContainer(): Promise<void> {

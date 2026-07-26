@@ -1476,6 +1476,100 @@ export class CourseRepository implements ICourseRepository {
     }
   }
 
+  async isMentorOnCourse(
+    userId: string,
+    courseId: string,
+    session?: ClientSession,
+  ): Promise<boolean> {
+    try {
+      await this.init();
+      const course = await this.courseCollection.findOne(
+        { _id: new ObjectId(courseId) },
+        { session, projection: { instructors: 1, mentorIds: 1 } },
+      );
+      if (!course) {
+        return false;
+      }
+      // Treat any stringification edge case (ObjectId vs string vs UUID)
+      // symmetrically — both sides are normalised to String() before
+      // comparison. Missing mentorIds is treated as empty (legacy docs).
+      const userIdStr = String(userId);
+      const isInstructor = (course.instructors ?? []).some(
+        (id) => String(id) === userIdStr,
+      );
+      if (isInstructor) return true;
+      const isMentor = (course.mentorIds ?? []).some(
+        (id) => String(id) === userIdStr,
+      );
+      return isMentor;
+    } catch (error) {
+      throw new InternalServerError(
+        'Failed to check mentor-on-course.\n More Details: ' + error,
+      );
+    }
+  }
+
+  async updateMentors(
+    courseId: string,
+    add: string[],
+    remove: string[],
+    session?: ClientSession,
+  ): Promise<UpdateResult> {
+    try {
+      await this.init();
+      // Build the update doc defensively. `$addToSet` with an empty
+      // array is a no-op in Mongo, but explicitly skipping the operator
+      // when `add` is empty makes the intent obvious in the driver
+      // (and keeps the wire payload smaller).
+      const updateDoc: Record<string, unknown> = {};
+      if (add.length > 0) {
+        updateDoc.$addToSet = {mentorIds: {$each: add}};
+      }
+      if (remove.length > 0) {
+        updateDoc.$pull = {mentorIds: {$in: remove}};
+      }
+      // Both empty: skip the round trip. Return a synthetic result so
+      // the caller's `matchedCount: 0` would still reflect reality.
+      if (Object.keys(updateDoc).length === 0) {
+        return {matchedCount: 0, modifiedCount: 0} as UpdateResult;
+      }
+      const result = await this.courseCollection.updateOne(
+        {_id: new ObjectId(courseId)},
+        updateDoc,
+        {session},
+      );
+      return result;
+    } catch (error) {
+      throw new InternalServerError(
+        'Failed to update course mentors.\n More Details: ' + error,
+      );
+    }
+  }
+
+  async getMentorIds(
+    courseId: string,
+    session?: ClientSession,
+  ): Promise<string[] | null> {
+    try {
+      await this.init();
+      const course = await this.courseCollection.findOne(
+        {_id: new ObjectId(courseId)},
+        {session, projection: {mentorIds: 1}},
+      );
+      if (!course) {
+        return null;
+      }
+      // Normalise ObjectId / string / UUID to plain strings so the
+      // response shape is uniform (matches `isMentorOnCourse`'s
+      // `String(id)` symmetry).
+      return (course.mentorIds ?? []).map((id) => String(id));
+    } catch (error) {
+      throw new InternalServerError(
+        'Failed to get course mentor IDs.\n More Details: ' + error,
+      );
+    }
+  }
+
   async getCohortSetting(
     versionId: string,
     cohortId: string,
