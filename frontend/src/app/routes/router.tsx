@@ -55,6 +55,7 @@ import TeacherLogin from '../pages/teacher/TeacherLogin'
 import SelectRolePage from '../pages/SelectRolePage'
 import AuditPage from '../pages/teacher/AuditPage'
 import ConfigureCohorts from '../pages/teacher/configure-cohorts'
+import CourseMentors from '../pages/teacher/course-mentors'
 
 import HpSystemVersions from '../pages/teacher/hp-system/HpSystemPage'
 import HpSystemCohorts from '../pages/teacher/hp-system/CohortsList'
@@ -355,6 +356,15 @@ const teacherConfigureCohortsRoute = new Route({
   getParentRoute: () => teacherLayoutRoute,
   path: '/courses/cohorts',
   component: ConfigureCohorts,
+});
+
+// Pillar 4 / Decision 4 — admin-only course mentor management page.
+// See PLAN_MOTIVATION_DECISION4_MENTORIDS.md. Route registered inside
+// the teacher layout; the page itself enforces the admin role check.
+const teacherCourseMentorsRoute = new Route({
+  getParentRoute: () => teacherLayoutRoute,
+  path: '/courses/mentors',
+  component: CourseMentors,
 });
 
 // Teacher Course Regstration requests
@@ -724,6 +734,7 @@ const routeTree = rootRoute.addChildren([
     teacherAnnouncementsRoute,
     teacherAuditRoute,
     teacherConfigureCohortsRoute,
+    teacherCourseMentorsRoute,
       teacherEjectionPoliciesRoute, 
     teacherHpSystemVersionsRoute,
     teacherHpSystemCohortsRoute,

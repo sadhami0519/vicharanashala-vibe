@@ -1463,6 +1463,21 @@ function VersionCard({
     storePageAndNavigate("/teacher/courses/instructors")
   }
 
+  const viewMentors = () => {
+    // Pillar 4 / Decision 4 — admin-only mentor management.
+    // The destination page enforces the admin role check and
+    // redirects non-admins back here.
+    setCurrentCourse({
+      courseId: courseId,
+      versionId: selectedVersionId ? selectedVersionId : null,
+      moduleId: null,
+      sectionId: null,
+      itemId: null,
+      watchItemId: null,
+    })
+    storePageAndNavigate("/teacher/courses/mentors")
+  }
+
   const viewFlags = () => {
     // Set course info in store and navigate to enrollments page
     setCurrentCourseFlag({
@@ -2021,6 +2036,15 @@ function VersionCard({
                   <UserCog2 className="h-3 w-3 mr-1" />
                   View Instructors
                 </Button> */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={viewMentors}
+                  className="h-8 bg-background border-border hover:bg-accent hover:text-accent-foreground transition-all duration-300 text-xs"
+                >
+                  <UserCog2 className="h-3 w-3 mr-1" />
+                  Manage Mentors
+                </Button>
 
                 <Button
                   variant="outline"

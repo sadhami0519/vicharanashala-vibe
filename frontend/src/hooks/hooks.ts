@@ -7317,3 +7317,50 @@ export function useResetFace(): {
     status,
   };
 }
+
+// ── Pillar 4 / Decision 4: Course mentor management ──────────────────────────
+//
+// Admin-only endpoint to add/remove user IDs on `course.mentorIds`.
+// Added 2026-07-26 in CP-D. The OpenAPI schema has NOT been regenerated
+// against the live backend yet, so the endpoint path uses `as any`
+// to bypass the `paths` types — matches the existing pattern (see e.g.
+// `useUpdateCourseVersion` above for `as any` on the same file).
+//
+// When the schema is regenerated (`pnpm copy && pnpm gen-schema` from
+// frontend/), replace the `as any` cast with the path literal and
+// replace `ManageMentorsResponse` with
+// `components['schemas']['ManageMentorsResponse']`.
+// See PLAN_MOTIVATION_DECISION4_MENTORIDS.md.
+
+export interface ManageMentorsResponse {
+  courseId: string;
+  mentorIds: string[];
+  added: string[];
+  removed: string[];
+  matchedCount: number;
+  modifiedCount: number;
+}
+
+// PATCH /courses/{courseId}/mentors
+export function useManageCourseMentors(): {
+  mutate: (variables: { params: { path: { courseId: string } }, body: { add?: string[], remove?: string[] } }) => void,
+  mutateAsync: (variables: { params: { path: { courseId: string } }, body: { add?: string[], remove?: string[] } }) => Promise<ManageMentorsResponse>,
+  data: ManageMentorsResponse | undefined,
+  error: string | null,
+  isPending: boolean,
+  isSuccess: boolean,
+  isError: boolean,
+  isIdle: boolean,
+  reset: () => void,
+  status: 'idle' | 'pending' | 'success' | 'error'
+} {
+  const result = api.useMutation("patch", "/courses/{courseId}/mentors" as any);
+  return {
+    ...result,
+    // openapi-react-query returns the response typed as the operation's
+    // success schema; the `as unknown` cast lets us expose it as our
+    // locally-declared `ManageMentorsResponse` interface (same shape).
+    data: result.data as unknown as ManageMentorsResponse | undefined,
+    error: result.error ? (result.error.message || 'Failed to update course mentors') : null,
+  };
+}
