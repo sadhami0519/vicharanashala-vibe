@@ -18,7 +18,7 @@ import {
   MailService,
 } from "#root/modules/notifications/index.js";
 import { GLOBAL_TYPES } from "#root/types.js";
-import { QuestionBankRepository, QuizRepository, SubmissionRepository, UserQuizMetricsRepository } from "#root/modules/quizzes/repositories/index.js";
+import { QuestionBankRepository, QuestionRepository, QuizRepository, SubmissionRepository, UserQuizMetricsRepository } from "#root/modules/quizzes/repositories/index.js";
 import { AnomalyRepository } from "#root/modules/anomalies/index.js";
 import { CourseRegistrationRepository } from "#root/modules/courseRegistration/repositories/index.js";
 import { ProjectSubmissionRepository } from "#root/modules/projects/repositories/index.js";
@@ -29,7 +29,7 @@ import { ProgressService } from "#root/modules/users/services/ProgressService.js
 import { FeedbackRepository } from "#root/modules/quizzes/repositories/providers/mongodb/FeedbackRepository.js";
 import { LedgerRepository } from "#root/modules/hpSystem/repositories/index.js";
 import { SpacedRepetitionService } from "#root/modules/spacedRepetition/services/SpacedRepetitionService.js";
-import { ReviewItemRepository } from "#root/modules/spacedRepetition/repositories/index.js";
+import { ReviewItemRepository, StudentSRStatusRepository } from "#root/modules/spacedRepetition/repositories/index.js";
 import { SPACED_REPETITION_TYPES } from "#root/modules/spacedRepetition/types.js";
 
 interface WorkerData {
@@ -84,7 +84,15 @@ const userQuizMetricsRepo = new UserQuizMetricsRepository(database)
 const quizRepo = new QuizRepository(database)
 const feedbackRepo = new FeedbackRepository(database)
 const reviewItemRepo = new ReviewItemRepository(database)
-const spacedRepetitionService = new SpacedRepetitionService(database, reviewItemRepo)
+const studentSRStatusRepo = new StudentSRStatusRepository(database)
+const questionRepo = new QuestionRepository(database)
+const spacedRepetitionService = new SpacedRepetitionService(
+  database,
+  reviewItemRepo,
+  studentSRStatusRepo,
+  questionBankRepo,
+  questionRepo,
+)
 const progressService = new ProgressService(progressRepo, submissionRepo, courseRepo, settingsRepo, userRepo, itemRepo, enrollmentRepo, userQuizMetricsRepo, quizRepo, projectSubmissionRepo, feedbackRepo, database, spacedRepetitionService, questionBankRepo)
 const enrollmentService = new EnrollmentService(enrollmentRepo, courseRepo, userRepo, itemRepo, courseRegistrationRepo, progressService, settingsRepo, inviteRepo, progressRepo, ledgerRepo, database)
 const inviteService = new InviteService(inviteRepo, userRepo, courseRepo, enrollmentRepo, mailService, itemRepo, enrollmentService, database);
