@@ -363,7 +363,6 @@ export default function RetentionDashboard() {
 
   return (
     <>
-      <GoldenButton />
       <div className="max-w-4xl mx-auto mt-6 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -373,6 +372,7 @@ export default function RetentionDashboard() {
             <InfoPopover title={SPACED_REPETITION_INFO_TITLE}>
               <SpacedRepetitionInfoBody />
             </InfoPopover>
+            <GoldenButton />
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Select a specific subject below to clear its queue, or review all items chronologically.

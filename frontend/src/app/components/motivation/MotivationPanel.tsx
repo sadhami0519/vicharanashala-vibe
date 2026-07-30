@@ -122,7 +122,7 @@ export function MotivationPanel({
       >
         {/* Header */}
         <header className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 className="text-lg font-semibold">Motivation</h2>
+          <h2 className="text-lg font-semibold">Your Badges</h2>
           <button
             ref={closeButtonRef}
             type="button"
