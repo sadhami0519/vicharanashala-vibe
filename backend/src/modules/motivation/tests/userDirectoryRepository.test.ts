@@ -45,7 +45,9 @@ function makeRepo(): UserDirectoryRepository {
 
 async function insertUsers(users: Partial<IUser>[]): Promise<void> {
   const col = inMemoryDb.collection('users');
-  await col.insertMany(users as IUser[]);
+  // IUser doesn't structurally match MongoDB's Document / OptionalId<Document>
+  // types, but at test-time against an in-memory collection this cast is safe.
+  await col.insertMany(users as unknown as Parameters<typeof col.insertMany>[0]);
 }
 
 const UID_A = 'uid_a_001';
