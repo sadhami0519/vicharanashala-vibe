@@ -146,17 +146,50 @@ export class SubmitReviewBody {
   @Min(0, { each: true })
   @Max(7, { each: true })
   selectedOptionIndices?: number[];
+
+  /**
+   * String the student typed for a NUMERIC_ANSWER question. The server
+   * parses it with `parseFloat` and compares against the question's
+   * `solution.numericAnswer` (exact match, no tolerance).
+   *
+   * Optional — omitted for MCQ question types (which use
+   * `selectedOptionIndices`) and for question types we can't grade
+   * server-side (DESCRIPTIVE, ORDER_THE_LOTS).
+   */
+  @IsOptional()
+  @IsString()
+  numericAnswer?: string;
 }
 
 /**
  * Response for POST /:studentId/review.
- * Returns the updated ReviewItem after SM-2 recalculation. `isCorrect`
- * is populated when the request included `selectedOptionIndices`;
- * undefined otherwise (so non-MCQ question types stay unaffected).
+ * Returns the updated ReviewItem after SM-2 recalculation plus
+ * integrity feedback (Knob 8c, 2026-07-29).
+ *
+ * Field semantics:
+ *   - `item` — the updated ReviewItem docs.
+ *   - `isCorrect` — populated when the request included an objective
+ *      answer signal (`selectedOptionIndices` for MCQ, or `numericAnswer`
+ *      for NUMERIC_ANSWER). `undefined` for ungraded question types.
+ *   - `qualityAdjusted` — `true` when the server capped the student's
+ *      quality (e.g. a wrong pick that was rated `got_it` was
+ *      downgraded to `unsure`). Always `false`/undefined if the
+ *      student's claim was honest.
+ *   - `qualityAdjustedFrom` — the quality the client claimed before
+ *      the cap (`got_it` only today). Only set when `qualityAdjusted`
+ *      is true. Lets the frontend surface a "downgraded" notice.
+ *   - `canonicalAnswer` — short human-readable canonical answer,
+ *      populated ONLY when the (post-cap) quality is `missed` AND
+ *      the question was objectively gradable (NAT or MCQ). The
+ *      reveal-on-missed affordance rewards honest self-report; we
+ *      never leak the answer on `got_it` or `unsure`.
  */
 export class SubmitReviewResponse {
   item: any; // IReviewItem shape; left `any` to avoid an extra import
   isCorrect?: boolean;
+  qualityAdjusted?: boolean;
+  qualityAdjustedFrom?: RecallQuality;
+  canonicalAnswer?: string;
 }
 
 /**

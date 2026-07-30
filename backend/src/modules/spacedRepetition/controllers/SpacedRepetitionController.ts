@@ -21,6 +21,7 @@ import {
   SeedScheduleBody,
   SeedScheduleResponse,
   SubmitReviewBody,
+  SubmitReviewResponse,
   UpdateOptOutBody,
   UpdateOptOutResponse,
   BoostReviewBody,
@@ -197,35 +198,54 @@ class SpacedRepetitionController {
     summary: 'Submit a review response',
     description: `Processes a student's recall quality response for a single question.
     Runs the SM-2 algorithm and persists the updated state and next review date.
-    For MCQ question types, the optional \`selectedOptionIndices\` array
-    lets the service compute whether the student's pick matched the
-    canonical correct option(s); the result is returned in
-    \`isCorrect\`. The correct option indices themselves are NEVER
-    returned — only the boolean — so the review endpoint can never be
-    used as an answer-key oracle.`,
+
+    **Server-side quality integrity (Knob 8c, 2026-07-29):** when the
+    request includes an objective answer signal (\`selectedOptionIndices\`
+    for MCQ, or \`numericAnswer\` for NUMERIC_ANSWER), the service
+    verifies the student's pick server-side. If the answer is wrong
+    and the student rated it \`got_it\`, the quality is capped at
+    \`unsure\` (q=3) before SM-2; the response surfaces
+    \`qualityAdjusted: true\` and \`qualityAdjustedFrom: "got_it"\`.
+
+    **Reveal-on-missed affordance:** when the (post-cap) quality is
+    \`missed\` and the question is objectively gradable, the response
+    includes \`canonicalAnswer\` (a short human-readable rendering of
+    the right answer). Honest self-report gets rewarded; the answer is
+    NEVER leaked on \`got_it\` or \`unsure\`.
+
+    Correct option indices and ungraded question types (DESCRIPTIVE,
+    ORDER_THE_LOTS) are out of scope for the integrity check.`,
   })
   @Authorized()
   @Post('/:studentId/review')
   @HttpCode(200)
-  @ResponseSchema(ReviewItemResponse, {
-    description: 'Updated ReviewItem after SM-2 recalculation',
+  @ResponseSchema(SubmitReviewResponse, {
+    description:
+      'Updated ReviewItem after SM-2 recalculation. Knob 8c: includes ' +
+      'integrity feedback (isCorrect, qualityAdjusted, qualityAdjustedFrom) ' +
+      'and reveal-on-missed canonicalAnswer when applicable.',
     statusCode: 200,
   })
   async submitReview(
     @CurrentUser() user: IUser,
     @Params() params: StudentIdParam,
     @Body() body: SubmitReviewBody,
-  ): Promise<ReviewItemResponse> {
+  ): Promise<SubmitReviewResponse> {
     const { studentId } = params;
     this._assertCanActOnStudent(user, studentId);
-    const { questionId, quality, selectedOptionIndices } = body;
+    const { questionId, quality, selectedOptionIndices, numericAnswer } = body;
     const result = await this.spacedRepetitionService.submitReview(
       studentId,
       questionId,
       quality,
       selectedOptionIndices,
+      numericAnswer,
     );
-    return result.item as unknown as ReviewItemResponse;
+    // Knob 8c (2026-07-29): surface integrity feedback + reveal-on-missed.
+    // Service returns { item, isCorrect?, qualityAdjusted?,
+    // qualityAdjustedFrom?, canonicalAnswer? }. The class-validator
+    // response schema accepts this shape verbatim.
+    return result;
   }
 
   @OpenAPI({

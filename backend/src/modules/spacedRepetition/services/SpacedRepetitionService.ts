@@ -291,18 +291,59 @@ class SpacedRepetitionService extends BaseService {
    * security boundary where students shouldn't be able to retrieve
    * answer keys by querying the review endpoint.
    */
+  /**
+   * Records a recall response from the student, runs SM-2, persists
+   * the updated ReviewItem, and (when an objective answer signal is
+   * supplied) reports whether the student's pick was correct.
+   *
+   * **Server-side quality integrity (Knob 8c, 2026-07-29):** when the
+   * student's objective answer is verifiable (MCQ indices or a NAT
+   * numeric input) and is **wrong**, the quality passed to SM-2 is
+   * capped at `unsure` (q=3) regardless of what the client claims.
+   * The original client-reported quality is returned in
+   * `qualityAdjustedFrom` (when a downgrade happened) so the frontend
+   * can surface a small "downgraded" notice. This closes two loopholes
+   * the frontend-only gate could not:
+   *   1. DevTools bypass of the disabled-`Got it` button.
+   *   2. NUMERIC_ANSWER questions which had no MCQ-clicked-isCorrect
+   *      signal for the frontend to gate.
+   *
+   * Answer inputs:
+   *   - MCQ (SELECT_ONE_IN_LOT / SELECT_MANY_IN_LOT):
+   *     `selectedOptionIndices` — indices into the review-mode
+   *     `options[]` array.
+   *   - NUMERIC_ANSWER:
+   *     `numericAnswer` — string the student typed. Server compares
+   *     as parsed float to the question's `solution.numericAnswer`,
+   *     exact match (no tolerance — simplest defensible default).
+   *   - Other question types:
+   *     Neither input is supplied; correctness is undefined and the
+   *     client's quality is trusted as-is.
+   *
+   * **Reveal-on-missed affordance:** when the (post-cap) quality is
+   * `missed`, the response includes `canonicalAnswer` — a short,
+   * human-readable rendering of the right answer (e.g. `"4"` for a
+   * numeric question, or `"Option text B"` for MCQ). This rewards
+   * honest self-report and is gated on the post-cap quality (so the
+   * `got_it`/`unsure`-on-wrong-pick path doesn't accidentally leak
+   * the answer). The canonical answer is NEVER returned on `got_it`
+   * or `unsure`, preserving the review-mode security boundary for
+   * non-honest ratings.
+   */
   submitReview(
     studentId: string,
     questionId: string,
     quality: RecallQuality,
     selectedOptionIndices?: number[],
-  ): Promise<{ item: any; isCorrect?: boolean }> {
+    numericAnswer?: string,
+  ): Promise<{
+    item: any;
+    isCorrect?: boolean;
+    qualityAdjusted?: boolean;
+    qualityAdjustedFrom?: RecallQuality;
+    canonicalAnswer?: string;
+  }> {
     return this._withTransaction(async session => {
-      // Knob 6: refuse to accept reviews if SR is disabled.
-      // The student-facing empty state already gates the review session,
-      // but this is a belt-and-braces guard for direct API calls.
-      // B2: pass the active transaction session — see _assertSREnabled
-      // docblock for the race-window rationale.
       await this._assertSREnabled(studentId, session);
 
       const item = await this.reviewItemRepo.findByStudentAndQuestion(
@@ -317,7 +358,49 @@ class SpacedRepetitionService extends BaseService {
         );
       }
 
-      const updatedState = this._applySM2(item, quality);
+      // Knob 8c: server-side quality capping. Compute correctness
+      // first (fail-open — never block SM-2 on a lookup failure),
+      // then if the answer is objectively wrong, cap the quality at
+      // `unsure` (q=3) before feeding to SM-2.
+      let isCorrect: boolean | undefined;
+      try {
+        if (
+          selectedOptionIndices &&
+          selectedOptionIndices.length > 0 &&
+          numericAnswer === undefined
+        ) {
+          isCorrect = await this._evaluateMCQCorrectness(
+            questionId,
+            selectedOptionIndices,
+          );
+        } else if (
+          numericAnswer !== undefined &&
+          (selectedOptionIndices === undefined ||
+            selectedOptionIndices.length === 0)
+        ) {
+          isCorrect = await this._evaluateNATCorrectness(
+            questionId,
+            numericAnswer,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          '[SpacedRepetitionService.submitReview] Correctness check failed;',
+          'omitting isCorrect and skipping quality cap.',
+          err,
+        );
+      }
+
+      let effectiveQuality: RecallQuality = quality;
+      let qualityAdjusted = false;
+      let qualityAdjustedFrom: RecallQuality | undefined;
+      if (isCorrect === false && quality === 'got_it') {
+        effectiveQuality = 'unsure';
+        qualityAdjusted = true;
+        qualityAdjustedFrom = quality;
+      }
+
+      const updatedState = this._applySM2(item, effectiveQuality);
 
       const updated = await this.reviewItemRepo.update(
         item._id.toString(),
@@ -329,29 +412,42 @@ class SpacedRepetitionService extends BaseService {
         throw new InternalServerError('Failed to update review item after SM-2 calculation.');
       }
 
-      // Compute correctness for MCQ question types. Fail-open: if the
-      // question can't be loaded for any reason, we still return the
-      // updated item (SM-2 happened) but omit `isCorrect` so the
-      // frontend falls back to the existing "rate-only" UX.
-      let isCorrect: boolean | undefined;
-      if (selectedOptionIndices && selectedOptionIndices.length > 0) {
+      // Reveal-on-missed: only on the post-cap quality of 'missed',
+      // and only when we have a correctness signal (don't leak NAT
+      // answers for questions we couldn't grade).
+      let canonicalAnswer: string | undefined;
+      if (
+        effectiveQuality === 'missed' &&
+        isCorrect !== undefined &&
+        isCorrect === false
+      ) {
         try {
-          isCorrect = await this._evaluateMCQCorrectness(
-            questionId,
-            selectedOptionIndices,
-          );
+          canonicalAnswer = await this._formatCanonicalAnswer(questionId);
         } catch (err) {
-          // Fail-open: log but don't propagate, so SM-2 progress is
-          // never blocked by a transient question-lookup failure.
           console.warn(
-            '[SpacedRepetitionService.submitReview] MCQ correctness check failed;',
-            'omitting isCorrect from response.',
+            '[SpacedRepetitionService.submitReview] canonicalAnswer format failed;',
+            'omitting from response.',
             err,
           );
         }
       }
 
-      return { item: updated, isCorrect };
+      const response: {
+        item: any;
+        isCorrect?: boolean;
+        qualityAdjusted?: boolean;
+        qualityAdjustedFrom?: RecallQuality;
+        canonicalAnswer?: string;
+      } = { item: updated };
+      if (isCorrect !== undefined) response.isCorrect = isCorrect;
+      if (qualityAdjusted) {
+        response.qualityAdjusted = qualityAdjusted;
+        response.qualityAdjustedFrom = qualityAdjustedFrom;
+      }
+      if (canonicalAnswer !== undefined) {
+        response.canonicalAnswer = canonicalAnswer;
+      }
+      return response;
     });
   }
 
@@ -430,6 +526,124 @@ class SpacedRepetitionService extends BaseService {
     throw new Error(
       `MCQ correctness check not supported for question type: ${questionType}`,
     );
+  }
+
+  /**
+   * Compares a student's numeric input against the canonical numeric
+   * solution for a NUMERIC_ANSWER question. Returns true on exact
+   * parsed-float equality, false otherwise.
+   *
+   * Defaults to exact match (no tolerance). The simplest defensible
+   * default — every integer/fraction question we ship has a single
+   * canonical answer; if tolerance becomes a friction point later
+   * (e.g. "1.5e2" vs "150"), revisit with a `correctAbsoluteTolerance`
+   * field on the question doc.
+   *
+   * Throws if the question doesn't exist or isn't a NUMERIC_ANSWER —
+   * caller is expected to fail-open on caught errors.
+   */
+  private async _evaluateNATCorrectness(
+    questionId: string,
+    numericAnswer: string,
+  ): Promise<boolean> {
+    const question = await this.questionRepo.getById(questionId);
+    if (!question) {
+      throw new Error(`Question ${questionId} not found`);
+    }
+
+    const questionType = (question as any).type ?? (question as any).questionType;
+    if (questionType !== 'NUMERIC_ANSWER') {
+      throw new Error(
+        `NAT correctness check not supported for question type: ${questionType}`,
+      );
+    }
+
+    const nat = question as any;
+    const canonicalRaw = nat.solution?.numericAnswer;
+    if (canonicalRaw === undefined || canonicalRaw === null) {
+      throw new Error(
+        `NUMERIC_ANSWER question ${questionId} has no solution.numericAnswer`,
+      );
+    }
+
+    const canonical = parseFloat(String(canonicalRaw));
+    const submitted = parseFloat(numericAnswer);
+    if (Number.isNaN(canonical) || Number.isNaN(submitted)) {
+      return false;
+    }
+    return canonical === submitted;
+  }
+
+  /**
+   * Renders a short, human-readable canonical answer for the
+   * reveal-on-missed path. Picks one of:
+   *   - NUMERIC_ANSWER: the numeric value as a string.
+   *   - SELECT_ONE_IN_LOT / SELECT_MANY_IN_LOT: the option text of
+   *     the correct option(s), joined by ", ".
+   *
+   * Anything else (DESCRIPTIVE, ORDER_THE_LOTS) returns undefined —
+   * honest rating on those question types doesn't surface an answer
+   * today; keep the symmetry that nothing is leaked.
+   */
+  private async _formatCanonicalAnswer(
+    questionId: string,
+  ): Promise<string | undefined> {
+    const question = await this.questionRepo.getById(questionId);
+    if (!question) {
+      throw new Error(`Question ${questionId} not found`);
+    }
+
+    const questionType = (question as any).type ?? (question as any).questionType;
+    const MAX_OPTIONS = 8;
+
+    if (questionType === 'NUMERIC_ANSWER') {
+      const nat = question as any;
+      const canonical = nat.solution?.numericAnswer;
+      if (canonical === undefined || canonical === null) {
+        return undefined;
+      }
+      return String(canonical);
+    }
+
+    if (questionType === 'SELECT_ONE_IN_LOT') {
+      const sol = question as any;
+      const allItems = [...(sol.incorrectLotItems ?? [])];
+      if (sol.correctLotItem) {
+        allItems.push(sol.correctLotItem);
+      }
+      const correctIdx = allItems
+        .slice(0, MAX_OPTIONS)
+        .findIndex(
+          (it: any) => it._id?.toString() === sol.solution?.lotItemId,
+        );
+      if (correctIdx < 0) return undefined;
+      const correctText = allItems[correctIdx]?.name
+        ?? allItems[correctIdx]?.text
+        ?? allItems[correctIdx]?.body;
+      return correctText ? String(correctText) : undefined;
+    }
+
+    if (questionType === 'SELECT_MANY_IN_LOT') {
+      const sml = question as any;
+      const allItems = [
+        ...(sml.incorrectLotItems ?? []),
+        ...(sml.correctLotItems ?? []),
+      ];
+      const correctLotIds = new Set(
+        (sml.solution?.lotItemIds ?? []).map((id: any) => id?.toString()),
+      );
+      const correctTexts: string[] = [];
+      for (const it of allItems.slice(0, MAX_OPTIONS)) {
+        if (correctLotIds.has(it._id?.toString())) {
+          const txt = it.name ?? it.text ?? it.body;
+          if (txt !== undefined) correctTexts.push(String(txt));
+        }
+      }
+      if (correctTexts.length === 0) return undefined;
+      return correctTexts.join(', ');
+    }
+
+    return undefined;
   }
 
   /**
