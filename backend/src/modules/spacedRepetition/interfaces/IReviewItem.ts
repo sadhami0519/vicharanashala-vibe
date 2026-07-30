@@ -87,30 +87,25 @@ export interface IReviewItem {
    * `hint` field on the Question schema — this is per-student, per-question,
    * and only disclosed post-failure.
    *
-   * N3 (audit 2026-07-24): the field name uses camelCase (matching the
-   * original Knob 7 commit) while every other field on this interface
-   * uses snake_case. The frontend (`frontend/src/types/spaced-repetition.types.ts`
-   * and `frontend/src/lib/spaced-repetition-api.ts`) reads and writes
-   * this field as `remediation_hint` (snake_case). The mismatch was
-   * silently masked by `USE_MOCK=true` — the mock layer used the
-   * snake_case name end-to-end and never round-tripped through the
-   * real backend.
+   * N3 / F1 (audits 2026-07-24) tracked a field-name mismatch: the
+   * original Knob 7 commit used camelCase (`remediationHint`), while
+   * the frontend (`spaced-repetition.types.ts` and
+   * `spaced-repetition-api.ts`) standardises on snake_case
+   * (`remediation_hint`). F1 changed the student ReviewPage to read
+   * the snake_case name, which masked the symptom in mock mode
+   * (`USE_MOCK=true` never round-tripped through the real backend)
+   * but entrenched the wrong assumption: the live backend's `$set`
+   * still wrote `remediationHint`, so once the mock flag is flipped
+   * the field would silently disappear on every read.
    *
-   * F1 (audit 2026-07-24) closed the visible bug in the student review
-   * page by changing the frontend reads to use the snake_case name.
-   * The live backend and mock data both store the field correctly;
-   * future migrations that flip `USE_MOCK` to false will hit this
-   * inconsistency directly.
-   *
-   * A full canonicalisation (rename to `remediation_hint`) is a NIT-
-   * worthy refactor: it touches the repo, the service, the mock layer,
-   * the type, the validation schema, and the OpenAPI doc. Defer until
-   * either the schema gains an openapi-fetch regeneration step or a
-   * second snake_case drift appears, at which point a single sweep
-   * across all mismatches becomes the cheaper option than per-field
-   * fixes.
+   * Canonicalised 2026-07-30 (post-push bugfix): renamed to
+   * `remediation_hint` (snake_case) to match every other field on
+   * this interface. Touches the repo, the service, the validation
+   * DTO, and the type annotation. Production database had zero docs
+   * with either field name at the time of rename, so no migration is
+   * required.
    */
-  remediationHint?: string;
+  remediation_hint?: string | null;
 
   // ── Opt-out ───────────────────────────────────────────────────────────────
 

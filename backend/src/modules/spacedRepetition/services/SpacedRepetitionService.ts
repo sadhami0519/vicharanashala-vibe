@@ -1016,7 +1016,7 @@ class SpacedRepetitionService extends BaseService {
     hint: string | null | undefined,
   ): Promise<{
     questionId: string;
-    remediationHint: string | null;
+    remediation_hint: string | null;
     message: string;
   }> {
     return this._withTransaction(async session => {
@@ -1036,7 +1036,7 @@ class SpacedRepetitionService extends BaseService {
 
       const updated = await this.reviewItemRepo.update(
         item._id.toString(),
-        { remediationHint: resolvedHint ?? undefined },
+        { remediation_hint: resolvedHint ?? undefined },
         session,
       );
 
@@ -1048,7 +1048,7 @@ class SpacedRepetitionService extends BaseService {
 
       return {
         questionId,
-        remediationHint: updated.remediationHint ?? null,
+        remediation_hint: updated.remediation_hint ?? null,
         message:
           resolvedHint != null
             ? 'Remediation hint set.'

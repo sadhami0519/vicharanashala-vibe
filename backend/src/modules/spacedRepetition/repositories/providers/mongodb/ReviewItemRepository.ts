@@ -143,7 +143,7 @@ class ReviewItemRepository {
         | 'interval_days'
         | 'next_review_at'
         | 'last_reviewed_at'
-        | 'remediationHint'
+        | 'remediation_hint'
       >
     >,
     session?: ClientSession,

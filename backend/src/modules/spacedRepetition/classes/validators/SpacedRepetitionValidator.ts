@@ -36,7 +36,7 @@ export class SetRemediationHintBody {
  */
 export class SetRemediationHintResponse {
   questionId: string;
-  remediationHint: string | null;
+  remediation_hint: string | null;
   message: string;
 }
 
@@ -345,7 +345,7 @@ export class ReviewItemResponse {
   next_review_at: Date;
   last_reviewed_at: Date | null;
   notification_opt_out: boolean;
-  remediationHint?: string | null;
+  remediation_hint?: string | null;
 }
 
 /**
