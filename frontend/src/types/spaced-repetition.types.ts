@@ -48,13 +48,36 @@ export interface SubmitReviewResponse {
   item: ReviewItem;
   /**
    * Knob 8 (Phase D prep, 2026-07-21): true/false for MCQ question types
-   * when the student submits their selected option indices. undefined for
-   * numeric/descriptive questions or when no selection was sent. Backend
-   * uses this to drive green/red feedback on the picked options without
-   * ever revealing the correct answer to the student when they got it
-   * wrong (per the 2026-07-21 UX rule).
+   * when the student submits their selected option indices. Also true/
+   * false for NUMERIC_ANSWER when `numericAnswer` is supplied. undefined
+   * for ungraded question types (DESCRIPTIVE, ORDER_THE_LOTS) or when
+   * no answer signal was sent. Backend uses this to drive green/red
+   * feedback on the picked options without ever revealing the correct
+   * answer to the student when they got it wrong (per the 2026-07-21
+   * UX rule).
    */
   isCorrect?: boolean;
+  /**
+   * Knob 8c (2026-07-29): true when the server capped the student's
+   * quality (e.g. wrong pick that was rated `got_it` was downgraded to
+   * `unsure` before SM-2 ran). Always undefined when the student's
+   * claim was honest OR when no objective answer signal was provided.
+   */
+  qualityAdjusted?: boolean;
+  /**
+   * Knob 8c (2026-07-29): the quality the client claimed before the
+   * server cap. Populated only when `qualityAdjusted === true`. Today
+   * always `"got_it"` (the only quality the cap applies to).
+   */
+  qualityAdjustedFrom?: RecallQuality;
+  /**
+   * Knob 8c (2026-07-29): short human-readable canonical answer,
+   * populated ONLY when the (post-cap) quality is `missed` AND the
+   * question was objectively gradable (NAT or MCQ). The reveal-on-
+   * missed affordance rewards honest self-report; we never leak the
+   * answer on `got_it` or `unsure`.
+   */
+  canonicalAnswer?: string;
 }
 
 export interface UpdateOptOutResponse {

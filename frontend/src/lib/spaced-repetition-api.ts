@@ -297,19 +297,33 @@ export async function seedSchedule(
  * Submit a recall quality response for a single question.
  * POST /api/spaced-repetition/:studentId/review
  *
- * For MCQ question types, pass `selectedOptionIndices` (the indices into
- * the review-mode `options[]` array the student saw). The backend will
- * compute whether the student's pick matched the canonical correct
- * option(s) and return `isCorrect` in the response. The frontend uses
- * this to light up the picked option(s) green (correct) or red (wrong).
+ * Knob 8c (2026-07-29): server-side quality integrity. The backend
+ * (or the mock layer in USE_MOCK mode) caps the student's quality at
+ * `unsure` when an objective answer signal shows the pick was wrong.
+ * The response surfaces `qualityAdjusted` + `qualityAdjustedFrom` so
+ * the frontend can show a small "downgraded" notice.
  *
- * Omit `selectedOptionIndices` for numeric/descriptive question types.
+ * Answer inputs:
+ *   - MCQ: pass `selectedOptionIndices` (the indices into the
+ *     review-mode `options[]` array the student saw). Omit
+ *     `numericAnswer` in this case.
+ *   - NUMERIC_ANSWER: pass `numericAnswer` (string the student typed).
+ *     Omit `selectedOptionIndices` in this case.
+ *   - Ungraded (DESCRIPTIVE, ORDER_THE_LOTS): omit both; quality is
+ *     trusted as-is.
+ *
+ * Reveal-on-missed: when the (post-cap) quality is `missed` AND the
+ * question is objectively gradable, the response includes
+ * `canonicalAnswer` - a short human-readable rendering of the right
+ * answer. Honest self-report gets rewarded; we never leak the answer
+ * on `got_it` or `unsure`.
  */
 export async function submitReview(
   studentId: string,
   questionId: string,
   quality: RecallQuality,
   selectedOptionIndices?: number[],
+  numericAnswer?: string,
 ): Promise<SubmitReviewResponse> {
   if (USE_MOCK) {
     await new Promise(r => setTimeout(r, 300));
@@ -317,12 +331,61 @@ export async function submitReview(
       i => i.student_id === studentId && i.question_id === questionId,
     );
     if (idx === -1) throw new Error('Mock: review item not found');
-    // Mutate in place so the change survives logout/login via localStorage.
-    // Faithful-enough SM-2: q âˆˆ {5,3,1}, EF delta formula, intervals.
     const item = MOCK_REVIEW_ITEMS[idx];
-    const q = quality === 'got_it' ? 5 : quality === 'unsure' ? 3 : 1;
-    const newEF = Math.max(1.3, item.EF + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)));
-    const newN = q < 3 ? 0 : item.n + 1;
+
+    // Knob 8c (mock): mirror backend's server-side integrity check.
+    // Compute correctness first against the mock catalogue, then cap
+    // the quality at `unsure` if the student rated `got_it` on a
+    // wrong pick. Mirrors SpacedRepetitionService.submitReview.
+    let isCorrect: boolean | undefined;
+    let canonicalAnswer: string | undefined;
+    const q = MOCK_QUESTIONS_CATALOG[questionId];
+
+    if (selectedOptionIndices && selectedOptionIndices.length > 0) {
+      // MCQ path: compare sets against the catalogue's correctIndices.
+      const correct = q?.correctIndices;
+      if (correct && correct.length > 0) {
+        if (q?.type === 'SELECT_ONE_IN_LOT') {
+          isCorrect =
+            selectedOptionIndices.length === 1 &&
+            selectedOptionIndices[0] === correct[0];
+        } else if (q?.type === 'SELECT_MANY_IN_LOT') {
+          const a = new Set(selectedOptionIndices);
+          const b = new Set(correct);
+          isCorrect = a.size === b.size && [...a].every(x => b.has(x));
+        }
+        if (isCorrect === false && q.correctAnswer) {
+          canonicalAnswer = q.correctAnswer;
+        }
+      }
+    } else if (numericAnswer !== undefined && q?.type === 'NUMERIC_ANSWER') {
+      // NAT path: exact parseFloat match against the catalogue's
+      // correctAnswer field. Mirrors backend's _evaluateNATCorrectness.
+      const canonical = parseFloat(q.correctAnswer ?? '');
+      const submitted = parseFloat(numericAnswer);
+      if (!Number.isNaN(canonical) && !Number.isNaN(submitted)) {
+        isCorrect = canonical === submitted;
+        if (isCorrect === false && q.correctAnswer) {
+          canonicalAnswer = q.correctAnswer;
+        }
+      }
+    }
+
+    // Server-side quality cap: wrong pick + got_it -> unsure.
+    let effectiveQuality: RecallQuality = quality;
+    let qualityAdjusted = false;
+    let qualityAdjustedFrom: RecallQuality | undefined;
+    if (isCorrect === false && quality === 'got_it') {
+      effectiveQuality = 'unsure';
+      qualityAdjusted = true;
+      qualityAdjustedFrom = quality;
+    }
+
+    // Mutate in place so the change survives logout/login via localStorage.
+    // Faithful-enough SM-2: q in {5,3,1}, EF delta formula, intervals.
+    const q5 = effectiveQuality === 'got_it' ? 5 : effectiveQuality === 'unsure' ? 3 : 1;
+    const newEF = Math.max(1.3, item.EF + (0.1 - (5 - q5) * (0.08 + (5 - q5) * 0.02)));
+    const newN = q5 < 3 ? 0 : item.n + 1;
     const nextInterval = newN === 1 ? 1 : newN === 2 ? 6 : Math.round(item.interval_days * newEF);
     const updated: ReviewItem = {
       ...item,
@@ -335,31 +398,32 @@ export async function submitReview(
     MOCK_REVIEW_ITEMS[idx] = updated;
     persistMockState();
 
-    // Knob 8: MCQ correctness check against the mock catalogue's
-    // correctIndices. Mirrors the backend's _evaluateMCQCorrectness
-    // (compare sets; SOL = single-element match, SML = exact set match).
-    let isCorrect: boolean | undefined;
-    if (selectedOptionIndices && selectedOptionIndices.length > 0) {
-      const q = MOCK_QUESTIONS_CATALOG[questionId];
-      const correct = q?.correctIndices;
-      if (correct && correct.length > 0) {
-        if (q?.type === 'SELECT_ONE_IN_LOT') {
-          isCorrect =
-            selectedOptionIndices.length === 1 &&
-            selectedOptionIndices[0] === correct[0];
-        } else if (q?.type === 'SELECT_MANY_IN_LOT') {
-          const a = new Set(selectedOptionIndices);
-          const b = new Set(correct);
-          isCorrect = a.size === b.size && [...a].every(x => b.has(x));
-        }
-      }
+    // Reveal-on-missed: only when (post-cap) quality is 'missed' AND we
+    // have a correctness signal. canonicalAnswer was captured above.
+    let revealedCanonical: string | undefined;
+    if (
+      effectiveQuality === 'missed' &&
+      isCorrect !== undefined &&
+      isCorrect === false &&
+      canonicalAnswer
+    ) {
+      revealedCanonical = canonicalAnswer;
     }
 
-    return { item: updated, isCorrect };
+    const response: SubmitReviewResponse = { item: updated };
+    if (isCorrect !== undefined) response.isCorrect = isCorrect;
+    if (qualityAdjusted) {
+      response.qualityAdjusted = qualityAdjusted;
+      response.qualityAdjustedFrom = qualityAdjustedFrom;
+    }
+    if (revealedCanonical !== undefined) {
+      response.canonicalAnswer = revealedCanonical;
+    }
+    return response;
   }
   return apiFetch(`/api/spaced-repetition/${studentId}/review`, {
     method: 'POST',
-    body: JSON.stringify({ questionId, quality, selectedOptionIndices }),
+    body: JSON.stringify({ questionId, quality, selectedOptionIndices, numericAnswer }),
   });
 }
 
@@ -754,23 +818,40 @@ export type AssignableQuestion = {
  */
 const MOCK_QUESTIONS_CATALOG: Record<
   string,
-  { type: string; correctIndices: number[] }
+  {
+    type: string;
+    correctIndices: number[];
+    /**
+     * Knob 9 (2026-07-29): short human-readable canonical answer,
+     * surfaced only when the student honestly self-reports `missed`
+     * (the `reveal-on-missed` affordance). For SELECT_MANY_IN_LOT
+     * this is the comma-joined option text; for SELECT_ONE_IN_LOT
+     * it's the single correct option text; for NUMERIC_ANSWER it's
+     * the numeric string (so we can parseFloat-compare against the
+     * student's input).
+     */
+    correctAnswer: string;
+  }
 > = {
   'mock-question-1': {
     type: 'SELECT_MANY_IN_LOT',
     correctIndices: [0, 1, 3], // Array, Linked List, Stack
+    correctAnswer: 'Array, Linked List, Stack',
   },
   'mock-question-2': {
     type: 'SELECT_ONE_IN_LOT',
     correctIndices: [1], // O(log n)
+    correctAnswer: 'O(log n)',
   },
   'mock-question-3': {
     type: 'NUMERIC_ANSWER',
     correctIndices: [],
+    correctAnswer: '8',
   },
   'mock-question-4': {
     type: 'SELECT_ONE_IN_LOT',
     correctIndices: [2], // Network
+    correctAnswer: 'Network',
   },
 };
 

@@ -354,8 +354,18 @@
   .animate-golden-pulse { animation: none; }
 }
 
-/* Motivation system — print-to-PDF (ExportButtons.tsx) */
+/* Motivation system — print-to-PDF (ExportButtons.tsx)
+ * The printable area is portaled to <body> via ReactDOM.createPortal so
+ * it escapes the React root. <body> > * hides everything else. The
+ * ID selector overrides that for the printable area specifically. */
 @media print {
   html.motivation-printing body > * { display: none !important; }
-  html.motivation-printing #motivation-print-area { display: block !important; }
+  html.motivation-printing body > #motivation-print-area {
+    display: block !important;
+  }
+  html.motivation-printing body > #motivation-print-area,
+  html.motivation-printing body > #motivation-print-area * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
 }

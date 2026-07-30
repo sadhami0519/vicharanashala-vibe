@@ -75,6 +75,18 @@ interface ReviewQuestionResponse {
    * correctIndices to the frontend at all (security boundary).
    */
   correctIndices?: number[];
+  /**
+   * Knob 8c (2026-07-29): mock-only canonical answer used for the
+   * reveal-on-missed affordance (mirrors backend's
+   * `_formatCanonicalAnswer`). For NUMERIC_ANSWER questions this is
+   * the canonical numeric value as a string (e.g. `"8"`). For MCQ
+   * questions this is the comma-joined text of the correct option(s)
+   * (e.g. `"Network"` for single-select, or `"A, B"` for multi).
+   *
+   * Mock-only: the production code path returns `canonicalAnswer` from
+   * the backend's response shape (`SubmitReviewResponse.canonicalAnswer`).
+   */
+  correctAnswer?: string;
 }
 
 // Demo content (2026-07-21): CS fundamentals across all four mock cards so
@@ -119,6 +131,7 @@ const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
     quizTitle: 'CS Fundamentals',
     quizId: 'mock-quiz-2',
     correctIndices: [], // n/a for numeric
+    correctAnswer: '8',
   },
   'mock-question-4': {
     id: 'mock-question-4',
@@ -129,6 +142,7 @@ const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
     quizTitle: 'Networking & OS',
     quizId: 'mock-quiz-2',
     correctIndices: [2], // Network
+    correctAnswer: 'Network',
   },
 };
 
@@ -168,6 +182,25 @@ interface SessionState {
      * backend fail-open.
      */
     isCorrect?: boolean;
+    /**
+     * Knob 8c (2026-07-29): true when the server capped the student's
+     * quality (e.g. wrong pick + `got_it` → `unsure`). Drives the
+     * "downgraded" notice in the feedback panel.
+     */
+    qualityAdjusted?: boolean;
+    /**
+     * Knob 8c (2026-07-29): the quality the student claimed before the
+     * server cap. Only set when `qualityAdjusted === true`. Today always
+     * `"got_it"`.
+     */
+    qualityAdjustedFrom?: RecallQuality;
+    /**
+     * Knob 8c (2026-07-29): short human-readable canonical answer,
+     * populated ONLY when the (post-cap) quality is `missed` AND the
+     * question was objectively gradable. Drives the reveal-on-missed
+     * CTA in the feedback panel.
+     */
+    canonicalAnswer?: string;
   } | null;
   answeredCount: number;
   qualityCounts: Record<RecallQuality, number>;
@@ -179,6 +212,13 @@ interface SessionState {
    * questions it's always [].
    */
   selectedOptionIndices: number[];
+  /**
+   * Knob 8c (2026-07-29): numeric input the student typed for a
+   * NUMERIC_ANSWER question. Reset on every new question load and on
+   * advance. Only meaningful when the current question is a NAT; for
+   * MCQ questions it's an empty string.
+   */
+  numericAnswerInput: string;
   /**
    * True once the student has clicked at least one option (MCQ only).
    * Captured for the green/red feedback render - we don't reset this on
@@ -199,6 +239,14 @@ type Action =
       /** Knob 8b: threaded from the submitReview response so the rate
        * button + keyboard handler can gate `Got it` on a wrong MCQ pick. */
       isCorrect?: boolean;
+      /** Knob 8c: server capped the student's quality (wrong pick +
+       * `got_it` → `unsure`). Drives the "downgraded" notice. */
+      qualityAdjusted?: boolean;
+      /** Knob 8c: the quality the student claimed before the cap. */
+      qualityAdjustedFrom?: RecallQuality;
+      /** Knob 8c: short human-readable canonical answer for the
+       * reveal-on-missed affordance. */
+      canonicalAnswer?: string;
     }
   | { type: 'advance' }
   | { type: 'restart'; items: ReviewItem[] }
@@ -211,7 +259,9 @@ type Action =
    */
   | { type: 'toggle-option'; idx: number }
   /** Knob 8: clear selectedOptionIndices and answeredOption (called on advance / new question). */
-  | { type: 'reset-options' };
+  | { type: 'reset-options' }
+  /** Knob 8c: set the numeric input the student typed for a NAT question. */
+  | { type: 'set-numeric-input'; value: string };
 
 const SESSION_CAP = 10;
 
@@ -240,23 +290,34 @@ function reducer(state: SessionState, action: Action): SessionState {
         ...state,
         currentQuestion: action.question,
         phase: 'awaiting-response',
-        // Knob 8: fresh question → no selection yet.
+        // Knob 8: fresh question — no selection yet.
         selectedOptionIndices: [],
+        // Knob 8c: reset numeric input for new NAT questions.
+        numericAnswerInput: '',
         answeredOption: false,
       };
     case 'question-load-failed':
       return { ...state, phase: 'showing-feedback' };
-    case 'submit':
+    case 'submit': {
+      const lastResponse: NonNullable<SessionState['lastResponse']> = {
+        quality: action.quality,
+        nextReviewAt: action.nextReviewAt,
+        // Knob 8b: threaded through so the rate-button `Got it` gate
+        // and the keyboard-`1` shortcut can read it without an
+        // extra fetch.
+        isCorrect: action.isCorrect,
+      };
+      // Knob 8c: pass through integrity + reveal metadata.
+      if (action.qualityAdjusted) {
+        lastResponse.qualityAdjusted = action.qualityAdjusted;
+        lastResponse.qualityAdjustedFrom = action.qualityAdjustedFrom;
+      }
+      if (action.canonicalAnswer !== undefined) {
+        lastResponse.canonicalAnswer = action.canonicalAnswer;
+      }
       return {
         ...state,
-        lastResponse: {
-          quality: action.quality,
-          nextReviewAt: action.nextReviewAt,
-          // Knob 8b: threaded through so the rate-button `Got it` gate
-          // and the keyboard-`1` shortcut can read it without an
-          // extra fetch.
-          isCorrect: action.isCorrect,
-        },
+        lastResponse,
         answeredCount: state.answeredCount + 1,
         qualityCounts: {
           ...state.qualityCounts,
@@ -266,6 +327,7 @@ function reducer(state: SessionState, action: Action): SessionState {
         // Knob 8: `answeredOption` stays true so the green/red
         // feedback keeps rendering during `showing-feedback`.
       };
+    }
     case 'advance': {
       const next = state.currentIndex + 1;
       if (next >= state.dueQueue.length) {
@@ -293,6 +355,8 @@ function reducer(state: SessionState, action: Action): SessionState {
         qualityCounts: { got_it: 0, unsure: 0, missed: 0 },
         selectedOptionIndices: [],
         answeredOption: false,
+        // Knob 9 (2026-07-29): clear NAT input on restart.
+        numericAnswerInput: '',
       };
     case 'no-due':
       return { ...state, phase: 'empty' };
@@ -322,7 +386,15 @@ function reducer(state: SessionState, action: Action): SessionState {
       };
     }
     case 'reset-options':
-      return { ...state, selectedOptionIndices: [], answeredOption: false };
+      return {
+        ...state,
+        selectedOptionIndices: [],
+        // Knob 8c: also clear numeric input on advance / new question.
+        numericAnswerInput: '',
+        answeredOption: false,
+      };
+    case 'set-numeric-input':
+      return { ...state, numericAnswerInput: action.value };
     default:
       return state;
   }
@@ -338,6 +410,8 @@ const initialState: SessionState = {
   qualityCounts: { got_it: 0, unsure: 0, missed: 0 },
   // Knob 8 (Phase D prep, 2026-07-21): initial MCQ selection state.
   selectedOptionIndices: [],
+  // Knob 8c (2026-07-29): initial numeric input.
+  numericAnswerInput: '',
   answeredOption: false,
 };
 
@@ -628,8 +702,15 @@ export default function ReviewSession() {
       state.selectedOptionIndices.length > 0
         ? state.selectedOptionIndices
         : undefined;
+    // Knob 8c: pass through the numeric input for NAT questions. Empty
+    // string is treated as "no answer provided" by the service (NAT
+    // grader only fires when numericAnswer is a non-empty string).
+    const numericAnswer =
+      state.currentQuestion?.type === 'NUMERIC_ANSWER'
+        ? state.numericAnswerInput
+        : undefined;
     submitReview.mutate(
-      { questionId: item.question_id, quality, selectedOptionIndices },
+      { questionId: item.question_id, quality, selectedOptionIndices, numericAnswer },
       {
         // Knob 8: backend now returns {item, isCorrect}; previous shape
         // was the bare ReviewItem. Extract via `.item` for the next-review
@@ -644,6 +725,10 @@ export default function ReviewSession() {
             // `lastResponse.isCorrect`. The rate-button `Got it` gate
             // reads this directly.
             isCorrect: updated.isCorrect,
+            // Knob 8c: integrity + reveal metadata from the response.
+            qualityAdjusted: updated.qualityAdjusted,
+            qualityAdjustedFrom: updated.qualityAdjustedFrom,
+            canonicalAnswer: updated.canonicalAnswer,
           });
         },
         onError: err => {
@@ -1195,9 +1280,30 @@ export default function ReviewSession() {
             </div>
           )}
           {question && question.type === 'NUMERIC_ANSWER' && (
-            <p className="text-sm text-muted-foreground italic">
-              (Numeric answer — recall it and rate yourself below.)
-            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <label
+                htmlFor="numeric-input"
+                className="text-sm text-muted-foreground"
+              >
+                Your answer:
+              </label>
+              <input
+                id="numeric-input"
+                type="text"
+                inputMode="decimal"
+                value={state.numericAnswerInput}
+                onChange={e =>
+                  dispatch({
+                    type: 'set-numeric-input',
+                    value: e.target.value,
+                  })
+                }
+                disabled={state.answeredOption}
+                placeholder="e.g. 8"
+                aria-label="Numeric answer input"
+                className="w-24 rounded-md border border-input bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+            </div>
           )}
 
           {state.phase === 'showing-feedback' && state.lastResponse && (
@@ -1216,6 +1322,36 @@ export default function ReviewSession() {
               <div className="text-xs opacity-80 mt-1">
                 {QUALITY_META[state.lastResponse.quality].description}
               </div>
+              {/* Knob 8c (2026-07-29): server-side integrity notice.
+                  Surfaced when the server capped the student's quality
+                  (wrong pick + `got_it` → `unsure`). */}
+              {state.lastResponse.qualityAdjusted && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900"
+                >
+                  <strong className="font-semibold">Downgraded:</strong> your
+                  pick didn’t match the canonical answer, so we recorded{' '}
+                  {state.lastResponse.qualityAdjustedFrom === 'got_it'
+                    ? '“Got it” as “Unsure”'
+                    : 'your recall quality at “Unsure”'}{' '}
+                  for SM-2 scheduling.
+                </div>
+              )}
+              {/* Knob 8c (2026-07-29): reveal-on-missed affordance.
+                  Surfaced only when the (post-cap) quality is `missed`
+                  AND the question was objectively gradable. */}
+              {state.lastResponse.canonicalAnswer && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="mt-2 rounded border border-sky-300 bg-sky-50 px-2 py-1 text-xs text-sky-900"
+                >
+                  <strong className="font-semibold">Correct answer:</strong>{' '}
+                  {state.lastResponse.canonicalAnswer}
+                </div>
+              )}
             </div>
           )}
         </CardContent>

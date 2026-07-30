@@ -67,6 +67,7 @@ export function useSubmitReview(studentId: string) {
       questionId,
       quality,
       selectedOptionIndices,
+      numericAnswer,
     }: {
       questionId: string;
       quality: RecallQuality;
@@ -77,7 +78,21 @@ export function useSubmitReview(studentId: string) {
        * can light up green/red feedback. Omit for numeric/descriptive.
        */
       selectedOptionIndices?: number[];
-    }) => submitReview(studentId, questionId, quality, selectedOptionIndices),
+      /**
+       * Knob 8c (2026-07-29): string the student typed for a
+       * NUMERIC_ANSWER question. Pass for NATs so the backend can
+       * exact-match it against the canonical solution. Omit for MCQ
+       * and ungraded question types.
+       */
+      numericAnswer?: string;
+    }) =>
+      submitReview(
+        studentId,
+        questionId,
+        quality,
+        selectedOptionIndices,
+        numericAnswer,
+      ),
     onSuccess: () => {
       // Invalidate schedule so dashboard reflects updated next_review_at
       queryClient.invalidateQueries({
