@@ -4,3 +4,4 @@ export * from './ModuleController.js';
 export * from './SectionController.js';
 export * from './ItemController.js';
 export * from './CourseMentorController.js';
+export * from './CourseTransferController.js';

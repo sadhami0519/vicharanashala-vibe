@@ -41,11 +41,6 @@ export class MongoDatabase implements IDatabase<Db> {
     }
 
     this.client = new MongoClient(uri, {
-      ssl: false,
-      tls: false,
-      tlsAllowInvalidCertificates: false,
-      tlsAllowInvalidHostnames: false,
-
       retryWrites: true,
 
       // 🔹 CONNECTION POOL

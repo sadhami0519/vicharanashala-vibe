@@ -13,6 +13,8 @@ import {ItemService} from './services/ItemService.js';
 import {ModuleService} from './services/ModuleService.js';
 import {SectionService} from './services/SectionService.js';
 import {DeleteCronService} from './services/deleteCronService.js';
+import {CourseTransferController} from './controllers/CourseTransferController.js';
+import {CourseTransferService} from './services/CourseTransferService.js';
 
 export const coursesContainerModule = new ContainerModule(options => {
   // Repositories
@@ -36,6 +38,10 @@ export const coursesContainerModule = new ContainerModule(options => {
     .to(SectionService)
     .inSingletonScope();
   options.bind(COURSES_TYPES.ItemService).to(ItemService).inSingletonScope();
+  options
+    .bind(COURSES_TYPES.CourseTransferService)
+    .to(CourseTransferService)
+    .inSingletonScope();
   options.bind(DeleteCronService).toSelf().inSingletonScope();
 
   // Controllers
@@ -45,4 +51,5 @@ export const coursesContainerModule = new ContainerModule(options => {
   options.bind(SectionController).toSelf().inSingletonScope();
   options.bind(ItemController).toSelf().inSingletonScope();
   options.bind(CourseMentorController).toSelf().inSingletonScope();
+  options.bind(CourseTransferController).toSelf().inSingletonScope();
 });
