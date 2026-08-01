@@ -145,12 +145,14 @@ export function MotivationPanel({
             active={tab === 'my-court'}
             onClick={() => setTab('my-court')}
           />
-          <TabButton
-            label="Leaderboard"
-            active={tab === 'leaderboard'}
-            onClick={() => setTab('leaderboard')}
-          />
-          {isMentor && (
+          {courseId && (
+            <TabButton
+              label="Leaderboard"
+              active={tab === 'leaderboard'}
+              onClick={() => setTab('leaderboard')}
+            />
+          )}
+          {isMentor && courseId && (
             <TabButton
               label="Mentor"
               active={tab === 'mentor'}

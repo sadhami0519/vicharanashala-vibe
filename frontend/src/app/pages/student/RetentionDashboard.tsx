@@ -26,6 +26,7 @@ import {
   Inbox,
   Flame, // Added for Exam Prep Mode visibility
   Ban, // Added for SR-disabled empty state (Knob 6, Phase C, 2026-07-21)
+  Trophy, // Added for the per-course leaderboard link (2026-07-31)
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
 import {
@@ -264,6 +265,21 @@ function CourseRetentionCard({
             <ChevronRight className="h-4 w-4" aria-hidden="true" />
           </Link>
         )}
+        {/* Per-course leaderboard link — always visible, preselects
+            this course on the standalone /student/leaderboard page
+            (see studentLeaderboardRoute.validateSearch). */}
+        <Link
+          to="/student/leaderboard"
+          search={{ courseId: data.courseId }}
+          className="flex items-center justify-between text-sm font-medium text-amber-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 rounded dark:text-amber-300"
+          aria-label={`View leaderboard for ${courseLabel(data.courseId)}`}
+        >
+          <span className="flex items-center gap-1.5">
+            <Trophy className="h-4 w-4" aria-hidden="true" />
+            View leaderboard for this course
+          </span>
+          <ChevronRight className="h-4 w-4" aria-hidden="true" />
+        </Link>
       </CardContent>
     </Card>
   );

@@ -19,6 +19,7 @@ import { useState } from 'react';
 import { cn } from '@/utils/utils';
 import { LeaderboardResponse } from '@/types/motivation.types';
 import { useSetOptOut } from '@/hooks/motivation-hooks';
+import { StudentProfileModal } from './StudentProfileModal';
 
 export interface LeaderboardTableProps {
   data: LeaderboardResponse | null | undefined;
@@ -49,6 +50,12 @@ export function LeaderboardTable({
   // falls through to its "not qualifying" copy.
   const currentUserEntry = data?.entries.find((e) => e.isCurrentUser);
   const isOptedOut = currentUserEntry?.isOptedOut ?? false;
+
+  // Drill-in modal state. `activeStudentId` is the row the user
+  // tapped; the modal renders when both ids are set. Owned here
+  // (not at panel-level) because the modal is a leaderboard-only
+  // affordance — the rest of the motivation UI doesn't need it.
+  const [activeStudentId, setActiveStudentId] = useState<string | null>(null);
 
   if (isLoading) {
     return <LeaderboardSkeleton />;
@@ -117,12 +124,19 @@ export function LeaderboardTable({
                 )}
                 role="cell"
               >
-                {entry.studentName}
-                {entry.isOptedOut && (
-                  <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Opted out
-                  </span>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setActiveStudentId(entry.studentId)}
+                  className="text-left rounded px-1 py-0.5 -mx-1 hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+                  aria-label={`View ${entry.studentName}'s profile`}
+                >
+                  {entry.studentName}
+                  {entry.isOptedOut && (
+                    <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Opted out
+                    </span>
+                  )}
+                </button>
               </span>
               <span className="text-right w-20 tabular-nums" role="cell">
                 {entry.isOptedOut
@@ -143,6 +157,14 @@ export function LeaderboardTable({
         rank={data.currentUserRank}
         percentile={data.currentUserPercentile}
         total={data.totalStudents}
+      />
+      {/* Drill-in modal — opens when a student taps another
+          student's name. Owned by the table so the rest of the
+          motivation panel doesn't need to know about it. */}
+      <StudentProfileModal
+        studentId={activeStudentId}
+        courseId={courseId ?? null}
+        onClose={() => setActiveStudentId(null)}
       />
     </section>
   );

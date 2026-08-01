@@ -22,6 +22,7 @@ import {
   OptOutResponse,
   OptOutResult,
   StatusSnapshot,
+  StudentProfile,
 } from '../types/motivation.types';
 import { DEMO_STUDENT_ID, isDemoStudentEmail } from './spaced-repetition-api';
 
@@ -970,4 +971,341 @@ export function computeMockNextBadgeProximity(
     distance: winner.distance,
     unit: MOCK_BADGE_DISTANCE_UNIT[winner.badge.id] ?? 'units',
   };
+}
+
+// ── Per-student profile mock data (drill-in from leaderboard) ────────────────
+//
+// When a student taps another student's row in the leaderboard
+// (Step 4 work — `StudentProfileModal`), the modal needs:
+//   - The student's badge progress (12 badges), so we can reuse the
+//     existing `BadgeGrid` component without a new render path.
+//   - The student's 30-day average EF (Easiness Factor from SM-2),
+//     so the modal can show a single-number retention proxy.
+//   - The student's display name + the course context, so the modal
+//     header reads "Bharat · European Capitals".
+//
+// In production these come from two endpoints (or one joined one):
+//   - `GET /api/motivation/students/:studentId/badges`
+//   - `GET /api/spaced-repetition/students/:studentId/ef`
+//
+// For the demo, both are derived from the existing
+// `MOCK_LEADERBOARD.entries` ordering and tier-progression curves
+// — each cohort student gets a hand-tuned badge set that *looks*
+// like a believable arc for their leaderboard rank. The mapping
+// is intentionally not derived from the demo student's arc
+// (so opening Bharat's profile tells a different story from
+// opening your own).
+//
+// Step 3 will declare a `StudentProfile` type in
+// `motivation.types.ts`; Step 4 will add `getStudentProfile()` and
+// wire the modal. This block only adds the seed data.
+
+// ── Per-student avg EF (Easiness Factor from SM-2) ───────────────────────
+//
+// SM-2 EF lives in [1.3, ∞). Cohort students cluster around 1.8–2.6
+// depending on retention. These values are deliberately not
+// derivable from `retention30d` (the leaderboard shows a public
+// metric, not a private EF) — so the modal feels like a deeper
+// view, not a re-statement of what's already on screen.
+const MOCK_STUDENT_AVG_EF: Record<string, number> = {
+  'stu-helper-001': 2.42, // Bharat — top retention, mastered
+  'stu-helper-002': 2.28, // Asha — all-rounder, strong
+  'stu-helper-003': 1.97, // Vikram — mid-pack, mid EF
+  [DEMO_STUDENT_ID]: 1.84, // You — struggling but engaged
+  'stu-helper-004': 1.45, // Chandra — stuck, dipping EF
+};
+
+// ── Per-student badge progress (12 entries per student) ─────────────────
+//
+// Each student's tier story is tuned to their leaderboard rank:
+//   - Bharat (rank 1, top retention): Tier 1 + Tier 2 mostly earned,
+//     Tier 3 partial. The star student.
+//   - Asha (rank 2, broad coverage): Tier 1 + Tier 2 fully earned,
+//     Tier 3 partial. The all-rounder.
+//   - Vikram (rank 3, mid): Tier 1 earned, Tier 2 partial.
+//   - You (rank 4, demo student): Tier 1 earned, Tier 2 light.
+//   - Chandra (rank 5, struggling): Tier 1 partial only.
+//
+// Hand-tuned (not generated) because the criteria texts in
+// `BADGE_CATALOGUE` are specific — random generation would
+// produce nonsense like "12 of 30 days" for `kanchuki`. This
+// stays in sync with the demo seed file in `scripts/.trash/`
+// should a regen be needed.
+
+/**
+ * Helper for tier-level seed construction. Returns a partial
+ * `BadgeProgress` map keyed by tier, then merges with the
+ * catalogue in `mockStudentBadgesForStudent`. Kept inline (not
+ * exported) because it's purely a mock-data convenience.
+ */
+function seedStudentBadges(opts: {
+  studentId: string;
+  earnedTiers: BadgeTier[];
+  partialTiers: Array<{ tier: BadgeTier; progress: Partial<Record<BadgeId, { current: number; target: number; unit: string }>> }>;
+}): BadgeProgress[] {
+  return BADGE_CATALOGUE.map((badge) => {
+    // Fully earned if the badge's tier is in `earnedTiers`.
+    if (opts.earnedTiers.includes(badge.tier)) {
+      const target = badge.id === 'dwarapala' ? 1 : badge.id === 'pranam' ? 10 : badge.id === 'sipahi' ? 30 : badge.id === 'sukh-dukh' ? 25 : badge.id === 'vaidya' ? 10 : badge.id === 'kohinoor' ? 100 : badge.id === 'pundit' ? 3 : badge.id === 'simha' ? 100 : badge.id === 'rajkumar' ? 1000 : badge.id === 'mantri' ? 50 : 1;
+      return {
+        badge,
+        earned: true,
+        earnedAt: new Date('2026-07-12'),
+        progress: {
+          current: target,
+          target,
+          unit: badge.id === 'dwarapala' ? 'review' : badge.id === 'pranam' ? 'questions' : badge.id === 'sipahi' ? 'days' : badge.id === 'sukh-dukh' ? 'unsure-answers' : badge.id === 'vaidya' ? 'cards recovered' : badge.id === 'kohinoor' ? 'questions at EF ≥ 2.5' : badge.id === 'pundit' ? 'courses with Tier-2 badge' : badge.id === 'simha' ? 'days' : badge.id === 'rajkumar' ? 'lifetime reviews' : badge.id === 'mantri' ? 'cards recovered' : 'throne',
+        },
+      };
+    }
+    // Partial: look up in the partial map.
+    const partial = opts.partialTiers.find((p) => p.tier === badge.tier);
+    if (partial && partial.progress[badge.id]) {
+      const cfg = partial.progress[badge.id]!;
+      return {
+        badge,
+        earned: false,
+        progress: { current: cfg.current, target: cfg.target, unit: cfg.unit },
+      };
+    }
+    // Otherwise: zero progress, locked.
+    return {
+      badge,
+      earned: false,
+      progress: { current: 0, target: 1, unit: 'locked' },
+    };
+  });
+}
+
+// Hand-tuned per-student badge sets. The shape mirrors
+// `MOCK_BADGE_PROGRESS` (which is the demo student's data) so
+// future code can reuse the same BadgeGrid rendering path.
+const MOCK_STUDENT_BADGE_PROGRESS: Record<string, BadgeProgress[]> = {
+  // Bharat — top of the leaderboard. Tier 1+2 earned, Tier 3 partial.
+  'stu-helper-001': seedStudentBadges({
+    studentId: 'stu-helper-001',
+    earnedTiers: ['entry', 'apprentice'],
+    partialTiers: [
+      {
+        tier: 'courtier',
+        progress: {
+          kohinoor: { current: 73, target: 100, unit: 'questions at EF ≥ 2.5' },
+          pundit: { current: 2, target: 3, unit: 'courses with Tier-2 badge' },
+          simha: { current: 87, target: 100, unit: 'days' },
+        },
+      },
+      {
+        tier: 'royalty',
+        progress: {
+          rajkumar: { current: 412, target: 1000, unit: 'lifetime reviews' },
+          mantri: { current: 31, target: 50, unit: 'cards recovered' },
+          vikram: { current: 0, target: 1, unit: 'throne' },
+        },
+      },
+    ],
+  }),
+  // Asha — all-rounder. Tier 1+2 earned, Tier 3 mid-progression.
+  'stu-helper-002': seedStudentBadges({
+    studentId: 'stu-helper-002',
+    earnedTiers: ['entry', 'apprentice'],
+    partialTiers: [
+      {
+        tier: 'courtier',
+        progress: {
+          kohinoor: { current: 54, target: 100, unit: 'questions at EF ≥ 2.5' },
+          pundit: { current: 1, target: 3, unit: 'courses with Tier-2 badge' },
+          simha: { current: 41, target: 100, unit: 'days' },
+        },
+      },
+      {
+        tier: 'royalty',
+        progress: {
+          rajkumar: { current: 287, target: 1000, unit: 'lifetime reviews' },
+          mantri: { current: 18, target: 50, unit: 'cards recovered' },
+          vikram: { current: 0, target: 1, unit: 'throne' },
+        },
+      },
+    ],
+  }),
+  // Vikram — mid-pack. Tier 1 earned, Tier 2 partial.
+  'stu-helper-003': seedStudentBadges({
+    studentId: 'stu-helper-003',
+    earnedTiers: ['entry'],
+    partialTiers: [
+      {
+        tier: 'apprentice',
+        progress: {
+          sipahi: { current: 19, target: 30, unit: 'days' },
+          'sukh-dukh': { current: 22, target: 25, unit: 'unsure-answers' },
+          vaidya: { current: 8, target: 10, unit: 'cards recovered' },
+        },
+      },
+      {
+        tier: 'courtier',
+        progress: {
+          kohinoor: { current: 21, target: 100, unit: 'questions at EF ≥ 2.5' },
+          pundit: { current: 0, target: 3, unit: 'courses with Tier-2 badge' },
+          simha: { current: 19, target: 100, unit: 'days' },
+        },
+      },
+      {
+        tier: 'royalty',
+        progress: {
+          rajkumar: { current: 134, target: 1000, unit: 'lifetime reviews' },
+          mantri: { current: 6, target: 50, unit: 'cards recovered' },
+          vikram: { current: 0, target: 1, unit: 'throne' },
+        },
+      },
+    ],
+  }),
+  // You — the demo student. Tier 1 earned, Tier 2 light.
+  [DEMO_STUDENT_ID]: seedStudentBadges({
+    studentId: DEMO_STUDENT_ID,
+    earnedTiers: ['entry'],
+    partialTiers: [
+      {
+        tier: 'apprentice',
+        progress: {
+          sipahi: { current: 12, target: 30, unit: 'days' },
+          'sukh-dukh': { current: 18, target: 25, unit: 'unsure-answers' },
+          vaidya: { current: 7, target: 10, unit: 'cards recovered' },
+        },
+      },
+      {
+        tier: 'courtier',
+        progress: {
+          kohinoor: { current: 87, target: 100, unit: 'questions at EF ≥ 2.5' },
+          pundit: { current: 1, target: 3, unit: 'courses with Tier-2 badge' },
+          simha: { current: 12, target: 100, unit: 'days' },
+        },
+      },
+      {
+        tier: 'royalty',
+        progress: {
+          rajkumar: { current: 247, target: 1000, unit: 'lifetime reviews' },
+          mantri: { current: 23, target: 50, unit: 'cards recovered' },
+          vikram: { current: 0, target: 1, unit: 'throne' },
+        },
+      },
+    ],
+  }),
+  // Chandra — stuck. Tier 1 mostly earned, Tier 2 zero.
+  'stu-helper-004': seedStudentBadges({
+    studentId: 'stu-helper-004',
+    earnedTiers: ['entry'],
+    partialTiers: [
+      {
+        tier: 'apprentice',
+        progress: {
+          sipahi: { current: 2, target: 30, unit: 'days' },
+          'sukh-dukh': { current: 1, target: 25, unit: 'unsure-answers' },
+          vaidya: { current: 0, target: 10, unit: 'cards recovered' },
+        },
+      },
+      {
+        tier: 'courtier',
+        progress: {
+          kohinoor: { current: 3, target: 100, unit: 'questions at EF ≥ 2.5' },
+          pundit: { current: 0, target: 3, unit: 'courses with Tier-2 badge' },
+          simha: { current: 2, target: 100, unit: 'days' },
+        },
+      },
+      {
+        tier: 'royalty',
+        progress: {
+          rajkumar: { current: 18, target: 1000, unit: 'lifetime reviews' },
+          mantri: { current: 1, target: 50, unit: 'cards recovered' },
+          vikram: { current: 0, target: 1, unit: 'throne' },
+        },
+      },
+    ],
+  }),
+};
+
+/**
+ * Returns the cohort student's display name (matches the
+ * leaderboard entry). Helper used by `getStudentProfile` in
+ * Step 4 — exported here so the test suite (Step 6) can verify
+ * the seed without going through the async API.
+ */
+export function getMockStudentName(studentId: string): string {
+  if (studentId === DEMO_STUDENT_ID) return 'You';
+  const entry = MOCK_LEADERBOARD.entries.find((e) => e.studentId === studentId);
+  return entry?.studentName ?? studentId;
+}
+
+/**
+ * Returns the 30-day average EF for a cohort student. Falls back
+ * to the SM-2 floor (1.3) when the studentId isn't in the seed —
+ * safe default that never panics the modal UI.
+ */
+export function getMockStudentAvgEf(studentId: string): number {
+  return MOCK_STUDENT_AVG_EF[studentId] ?? 1.3;
+}
+
+/**
+ * Returns the cohort student's 12-badge progress array (same
+ * shape as `MOCK_BADGE_PROGRESS`). Returns an empty array for
+ * unknown studentIds so the modal renders an empty BadgeGrid
+ * instead of crashing.
+ */
+export function getMockStudentBadgeProgress(studentId: string): BadgeProgress[] {
+  return MOCK_STUDENT_BADGE_PROGRESS[studentId] ?? [];
+}
+
+// ── getStudentProfile (live + mock) ───────────────────────────────────
+//
+// Reads a student's profile for the drill-in modal that opens
+// when a student taps another student's row in the leaderboard.
+//
+// Live shape: `GET /api/motivation/students/:studentId/profile?courseId=...`
+// (future endpoint; not yet implemented on the backend).
+// Mock shape: same return type, sourced from the per-student
+// seed maps added above (`MOCK_STUDENT_BADGE_PROGRESS`,
+// `MOCK_STUDENT_AVG_EF`) plus the existing
+// `MOCK_LEADERBOARD.entries` for the leaderboard-derived fields.
+//
+// Fail-open behavior: unknown studentIds return a stub profile
+// (empty badges, EF=1.3 floor, isOptedOut: false) so the modal
+// renders gracefully instead of crashing on a stale row click.
+
+/**
+ * Returns a fully-formed `StudentProfile` for the given student
+ * in the given course. Used by `StudentProfileModal` via the
+ * `useStudentProfile` hook (see `motivation-hooks.ts`).
+ *
+ * @param studentId The cohort student's Firebase UID.
+ * @param courseId  The leaderboard's course context (so the modal
+ *                  header can show "European Capitals").
+ */
+export async function getStudentProfile(
+  studentId: string,
+  courseId: string,
+): Promise<StudentProfile> {
+  if (USE_MOTIVATION_MOCK) {
+    // Mock path: stitch together from the seed maps above.
+    const leaderboardEntry = MOCK_LEADERBOARD.entries.find(
+      (e) => e.studentId === studentId,
+    );
+    return {
+      studentId,
+      studentName: getMockStudentName(studentId),
+      courseId,
+      retention30d: leaderboardEntry?.retention30d ?? null,
+      coverage: leaderboardEntry?.coverage ?? 0,
+      avgEf: getMockStudentAvgEf(studentId),
+      badges: getMockStudentBadgeProgress(studentId),
+      isOptedOut: leaderboardEntry?.isOptedOut ?? false,
+      // Deterministic avatar seed: studentId itself is fine for v1.
+      avatarSeed: studentId,
+    };
+  }
+
+  // Live path (future backend endpoint):
+  //   GET /api/motivation/students/:studentId/profile?courseId=...
+  // Not implemented on the backend yet; throws so the caller can
+  // surface a "not available" message instead of silently failing.
+  throw new Error(
+    `getStudentProfile: live endpoint not implemented for ${studentId} / ${courseId}`,
+  );
 }

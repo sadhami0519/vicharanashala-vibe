@@ -243,3 +243,49 @@ export type OptOutResult =
   | { ok: true; response: OptOutResponse }
   | { ok: false; error: OptOutError };
 
+// ── Student profile (drill-in from leaderboard) ────────────────────────────
+
+/**
+ * Shape of `GET /api/motivation/students/:studentId/profile`
+ * (the future live endpoint — the mock layer returns this
+ * shape directly via `getStudentProfile()` in
+ * `lib/motivation-api.ts`).
+ *
+ * Returned when a student taps another student's row in the
+ * leaderboard (see `StudentProfileModal`). Combines:
+ *
+ *   - `studentId` + `studentName`: display identity
+ *   - `courseId`: which course's leaderboard was the entry point
+ *     (so the modal can show e.g. "European Capitals" in the header)
+ *   - `retention30d` + `coverage`: re-stated from the leaderboard
+ *     row for context (the modal isn't meant to require the
+ *     leaderboard entry to stay mounted)
+ *   - `avgEf`: the 30-day average SM-2 Easiness Factor. Lives in
+ *     `[1.3, ∞)`; values around 1.8–2.6 indicate healthy retention,
+ *     values trending toward 1.3 indicate struggling retention.
+ *   - `badges`: full 12-badge progress array (matches the shape
+ *     the dashboard's own `BadgeGrid` already renders, so the
+ *     modal can reuse the same component without forking).
+ *   - `isOptedOut`: mirrors the leaderboard's opt-out flag so the
+ *     modal can show an "opted out" state when the drill-in target
+ *     is no longer ranked. Always present, not `null` — the modal
+ *     always knows whether to render the rank chip.
+ *   - `avatarSeed`: optional deterministic string used to render
+ *     a placeholder avatar in the modal header. Reserved for the
+ *     future avatars integration (not consumed by `StudentProfileModal`
+ *     today — it's there so the type is forward-compatible).
+ */
+export interface StudentProfile {
+  studentId: string;
+  studentName: string;
+  courseId: string;
+  retention30d: number | null;
+  coverage: number;
+  /** 30-day average SM-2 EF. Floor 1.3 by SM-2 algorithm. */
+  avgEf: number;
+  badges: BadgeProgress[];
+  isOptedOut: boolean;
+  /** Optional deterministic avatar seed; reserved for future use. */
+  avatarSeed?: string;
+}
+

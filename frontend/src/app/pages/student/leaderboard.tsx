@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useState, useEffect, useRef } from "react";
+import { useSearch } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { motion } from "motion/react";
 import confetti from "canvas-confetti";
@@ -139,28 +140,41 @@ const LEAGUES: Record<
 
 export default function Leaderboard() {
   const currentCourse = useCourseStore.getState().currentCourse;
+  // Read preselection from the URL (set by RetentionDashboard's
+  // per-course "View leaderboard" link). Honors both the bare
+  // `courseId` form and the explicit `courseVersionId` form.
+  const search = useSearch({ from: "/student/leaderboard" });
 
   const { data: enrollmentsData, isLoading: enrollmentsLoading } =
     useUserEnrollments(1, 1000);
 
   const [selectedCourseId, setSelectedCourseId] = useState(
-    currentCourse?.courseId || ""
+    search.courseId || currentCourse?.courseId || ""
   );
   const [selectedVersionId, setSelectedVersionId] = useState(
-    currentCourse?.versionId || ""
+    search.courseVersionId || currentCourse?.versionId || ""
   );
 
   useEffect(() => {
+    // When the retention dashboard hands us a `courseId` but no
+    // explicit `courseVersionId`, resolve the version from the
+    // user's enrollments so the leaderboard query fires correctly.
     if (
       enrollmentsData?.enrollments &&
       enrollmentsData.enrollments.length > 0 &&
-      !selectedCourseId
+      !selectedVersionId
     ) {
-      const first = enrollmentsData.enrollments[0];
-      setSelectedCourseId(first.courseId);
-      setSelectedVersionId(first.courseVersionId);
+      const match = selectedCourseId
+        ? enrollmentsData.enrollments.find(
+            (e) => e.courseId === selectedCourseId,
+          )
+        : enrollmentsData.enrollments[0];
+      if (match) {
+        if (!selectedCourseId) setSelectedCourseId(match.courseId);
+        setSelectedVersionId(match.courseVersionId);
+      }
     }
-  }, [enrollmentsData, selectedCourseId]);
+  }, [enrollmentsData, selectedCourseId, selectedVersionId]);
 
   const { finishers, active, myStats, isLoading, isFetching, error, refetch } =
     useLeaderboard(
