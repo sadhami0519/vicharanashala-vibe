@@ -176,47 +176,86 @@ class ReviewItemRepository {
     return result.modifiedCount;
   }
 
-/**
-   * Bulk flip the notification_opt_out flag for an array of students within a given course.
-   * Called by the teacher dashboard for cohort-level management.
+  /**
+   * Bulk flip the notification_opt_out flag for an array of students within
+   * a given course. Called by the teacher dashboard for cohort-level
+   * management.
+   *
+   * Returns both the raw item count AND the distinct-student count so the
+   * service layer can report an honest "X students / Y review items"
+   * result. Previously this returned just `modifiedCount`, which was
+   * being mislabelled as a student count in the teacher UI (Bug 3,
+   * 2026-08-01) because each student has many review items per course.
+   *
+   * Two round-trips: a `distinct('student_id', ...)` against the
+   * existing `(student_id, course_id)` compound index (cheap), then the
+   * updateMany. The distinct happens BEFORE the update so the count
+   * reflects the same set that was actually mutated.
+   *
+   * @returns `{ modifiedCount, distinctStudentsModified }`
+   *   - `modifiedCount`: number of ReviewItem docs the `$set` actually
+   *      changed (Mongo semantics: excludes no-op writes where the
+   *      flag was already at the desired value).
+   *   - `distinctStudentsModified`: number of UNIQUE `student_id`s
+   *      whose items matched the (studentIds, courseId) filter.
    */
   async updateOptOutBulk(
     studentIds: string[],
     courseId: string,
     optOut: boolean,
     session?: ClientSession,
-  ): Promise<number> {
+  ): Promise<{ modifiedCount: number; distinctStudentsModified: number }> {
     await this.init();
+    const distinctIds = await this.reviewItemCollection.distinct(
+      'student_id',
+      { student_id: { $in: studentIds }, course_id: courseId },
+      { session },
+    );
     const result = await this.reviewItemCollection.updateMany(
-      { 
-        student_id: { $in: studentIds }, 
-        course_id: courseId 
+      {
+        student_id: { $in: studentIds },
+        course_id: courseId,
       },
       { $set: { notification_opt_out: optOut } },
       { session },
     );
-    return result.modifiedCount;
+    return {
+      modifiedCount: result.modifiedCount,
+      distinctStudentsModified: distinctIds.length,
+    };
   }
 
   /**
-   * Bulk flip the exam_prep_mode flag for an array of students within a given course.
+   * Bulk flip the exam_prep_mode flag for an array of students within
+   * a given course.
+   *
+   * See `updateOptOutBulk` for the rationale on the dual-count return
+   * shape (Bug 3, 2026-08-01 — item-count vs student-count).
    */
   async updateExamPrepBulk(
     studentIds: string[],
     courseId: string,
     enabled: boolean,
     session?: ClientSession,
-  ): Promise<number> {
+  ): Promise<{ modifiedCount: number; distinctStudentsModified: number }> {
     await this.init();
+    const distinctIds = await this.reviewItemCollection.distinct(
+      'student_id',
+      { student_id: { $in: studentIds }, course_id: courseId },
+      { session },
+    );
     const result = await this.reviewItemCollection.updateMany(
-      { 
-        student_id: { $in: studentIds }, 
-        course_id: courseId 
+      {
+        student_id: { $in: studentIds },
+        course_id: courseId,
       },
       { $set: { exam_prep_mode: enabled } },
       { session },
     );
-    return result.modifiedCount;
+    return {
+      modifiedCount: result.modifiedCount,
+      distinctStudentsModified: distinctIds.length,
+    };
   }
 
   /**

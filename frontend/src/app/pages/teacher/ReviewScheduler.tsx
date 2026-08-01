@@ -93,7 +93,14 @@ export default function ReviewScheduler() {
   const handleBulkNotify = (optOut: boolean) => {
     if (!courseId || selectedStudents.length === 0) return toast.error("Course ID and students required");
     bulkNotifyMutation.mutate({ courseId, studentIds: selectedStudents, optOut }, {
-      onSuccess: (data) => toast.success(`Updated notifications for ${data.updatedCount} students`),
+      // Bug 3 fix (2026-08-01): the server now returns a pre-formatted
+      // `message` that distinguishes student count from item count
+      // (e.g. "Updated notifications for 3 students (6 review items).").
+      // Previously this template read `data.updatedCount` which was
+      // actually the item count and was being mislabelled as a student
+      // count. Trust the server message — both backend and mock paths
+      // produce identical wording.
+      onSuccess: (data) => toast.success(data.message),
       onError: (err) => toast.error(err.message)
     });
   };
@@ -101,7 +108,9 @@ export default function ReviewScheduler() {
   const handleBulkExamPrep = (enabled: boolean) => {
     if (!courseId || selectedStudents.length === 0) return toast.error("Course ID and students required");
     bulkExamPrepMutation.mutate({ courseId, studentIds: selectedStudents, enabled }, {
-      onSuccess: (data) => toast.success(`${enabled ? 'Enabled' : 'Disabled'} Exam-Prep mode for ${data.updatedCount} students`),
+      // See `handleBulkNotify` for why we render `data.message` instead
+      // of building the string here (Bug 3 fix, 2026-08-01).
+      onSuccess: (data) => toast.success(data.message),
       onError: (err) => toast.error(err.message)
     });
   };

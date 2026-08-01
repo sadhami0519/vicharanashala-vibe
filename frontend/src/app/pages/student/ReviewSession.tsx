@@ -25,6 +25,8 @@ import {
   TrendingUp,
   Flame,
   Ban, // Added for SR-disabled empty state (Knob 6, Phase C, 2026-07-21)
+  AlertTriangle, // Added for the missing-question fallback card (2026-07-31)
+  Lightbulb, // Added for remediation-hint card (Bug 1, 2026-08-01)
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
 import { Link, useSearch } from '@tanstack/react-router';
@@ -43,7 +45,7 @@ import {
   ReviewItem,
   RecallQuality,
 } from '@/types/spaced-repetition.types';
-import { DEMO_STUDENT_ID, isDemoStudentEmail } from '@/lib/spaced-repetition-api';
+import { DEMO_STUDENT_ID, isDemoStudentEmail, skipReview } from '@/lib/spaced-repetition-api';
 
 // ── Local mock question body — replaces GET /api/quizzes/questions/:id/review
 // while the backend is offline. Mirrors the ReviewQuestionResponse shape:
@@ -144,6 +146,64 @@ const MOCK_QUESTIONS: Record<string, ReviewQuestionResponse> = {
     correctIndices: [2], // Network
     correctAnswer: 'Network',
   },
+  // ── Cross-bank entries (Bug 2 fix, 2026-08-01) ─────────────────
+  // Teacher's "Manual Reassignment" picker exposes these via
+  // MOCK_ASSIGNABLE_QUESTIONS in spaced-repetition-api.ts. When the
+  // teacher reassigns one, the resulting ReviewItem carries the
+  // question ID, and the student side must be able to render it.
+  // Previously these IDs were missing here, so fetchQuestionForReview
+  // returned the MISSING_QUESTION_RESPONSE sentinel and the render
+  // path showed a "Question unavailable — Skip" card.
+  'mock-question-cross-1': {
+    id: 'mock-question-cross-1',
+    body: 'In a relational DB, a foreign key constraint enforces…',
+    type: 'SELECT_ONE_IN_LOT',
+    hint: 'It links rows across tables.',
+    options: [
+      'Uniqueness within a column',
+      'Referential integrity across tables',
+      'NULL is always allowed',
+      'Cascading triggers fire automatically',
+    ],
+    quizTitle: 'Sample Cross-Bank Collection',
+    quizId: 'mock-quiz-cross',
+    correctIndices: [1], // Referential integrity across tables
+  },
+  'mock-question-cross-2': {
+    id: 'mock-question-cross-2',
+    body: 'What does ACID stand for?',
+    type: 'SELECT_MANY_IN_LOT',
+    hint: 'Atomicity, Consistency, Isolation, Durability.',
+    options: ['Atomicity', 'Consistency', 'Isolation', 'Durability'],
+    quizTitle: 'Sample Cross-Bank Collection',
+    quizId: 'mock-quiz-cross',
+    correctIndices: [0, 1, 2, 3], // All four
+  },
+};
+
+/**
+ * Sentinel returned by `fetchQuestionForReview` when a review item
+ * references a question ID that isn't in MOCK_QUESTIONS. The render
+ * path detects this (via `question.id === MISSING_QUESTION_ID`) and
+ * shows a "Question unavailable — Skip" card with a Skip button
+ * that advances to the next item. No throw, no crash.
+ *
+ * Shape: looks like a single-choice question with one option
+ * ("Skip") so the type union is satisfied and any code that reads
+ * `options[0]` or `correctIndices[0]` won't NPE. The render layer
+ * short-circuits before any of that code runs.
+ */
+const MISSING_QUESTION_ID = '__missing__';
+const MISSING_QUESTION_RESPONSE: ReviewQuestionResponse = {
+  id: MISSING_QUESTION_ID,
+  body: 'This question is not in the current mock set.',
+  type: 'SELECT_ONE_IN_LOT',
+  options: ['Skip'],
+  quizTitle: null,
+  quizId: null,
+  correctIndices: [0],
+  correctAnswer: 'Skip',
+  hint: 'The backend review queue may reference a question the mock layer doesn\u2019t know about. Add it to MOCK_QUESTIONS in ReviewSession.tsx to populate this card.',
 };
 
 async function fetchQuestionForReview(
@@ -153,7 +213,30 @@ async function fetchQuestionForReview(
   // once the backend is wired through openapi-fetch gen-schema.
   await new Promise(r => setTimeout(r, 200));
   const q = MOCK_QUESTIONS[questionId];
-  if (!q) throw new Error(`No mock question for ${questionId}`);
+  // Fail-open (2026-07-31): if a review item references a question
+  // ID that isn't in MOCK_QUESTIONS (e.g. mock-question-cross-2 from
+  // spaced-repetition-api.ts's catalogue, or any future ID added
+  // to MOCK_REVIEW_ITEMS without a matching MOCK_QUESTIONS entry),
+  // we DON'T throw. The previous behavior was a thrown Error that
+  // surfaced a toast and crashed the render layer (the
+  // question-load-failed reducer case set phase=showing-feedback
+  // without a currentQuestion, leaving the page half-rendered).
+  //
+  // Instead, return MISSING_QUESTION_RESPONSE — a sentinel that the
+  // render path can detect and show a "Question unavailable — Skip"
+  // card. The reducer stays happy because the shape is type-
+  // compatible with ReviewQuestionResponse. The student advances
+  // past the broken card with one click instead of getting stuck.
+  if (!q) {
+    // Honest breadcrumb in dev only — avoids spamming the console
+    // during repeated demo reloads.
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[ReviewSession] No mock question for "${questionId}" — rendering fallback card. Add it to MOCK_QUESTIONS in ReviewSession.tsx to fix.`,
+      );
+    }
+    return MISSING_QUESTION_RESPONSE;
+  }
   return q;
 }
 
@@ -260,6 +343,11 @@ type Action =
   | { type: 'toggle-option'; idx: number }
   /** Knob 8: clear selectedOptionIndices and answeredOption (called on advance / new question). */
   | { type: 'reset-options' }
+  /** MSQ commit (2026-07-31): flips `answeredOption` to true when
+   *  the student hits the "Confirm selection" button on a
+   *  SELECT_MANY_IN_LOT card. SOL cards don't dispatch this —
+   *  they auto-commit on first click via `toggle-option`. */
+  | { type: 'commit-answer' }
   /** Knob 8c: set the numeric input the student typed for a NAT question. */
   | { type: 'set-numeric-input'; value: string };
 
@@ -375,14 +463,22 @@ function reducer(state: SessionState, action: Action): SessionState {
           answeredOption: true,
         };
       }
-      // SELECT_MANY_IN_LOT — toggle membership.
+      // SELECT_MANY_IN_LOT — toggle membership. We deliberately do
+      // NOT flip `answeredOption` here: the student needs to keep
+      // toggling options across multiple clicks. `answeredOption`
+      // flips to true only when the student explicitly commits via
+      // the new "Confirm selection" button (see `commit-answer`),
+      // which gates the rate buttons. This is the bug fix for the
+      // MSQ review-card lockout (2026-07-31): previously the first
+      // click set answeredOption=true, disabling the remaining
+      // options and un-gating the rate buttons prematurely.
       const has = state.selectedOptionIndices.includes(action.idx);
       return {
         ...state,
         selectedOptionIndices: has
           ? state.selectedOptionIndices.filter(i => i !== action.idx)
           : [...state.selectedOptionIndices, action.idx],
-        answeredOption: true,
+        // Intentionally NOT setting answeredOption: true here.
       };
     }
     case 'reset-options':
@@ -393,6 +489,13 @@ function reducer(state: SessionState, action: Action): SessionState {
         numericAnswerInput: '',
         answeredOption: false,
       };
+    case 'commit-answer':
+      // MSQ only: flips `answeredOption` to true when the student
+      // explicitly hits the "Confirm selection" button. SOL questions
+      // don't dispatch this — they auto-commit on first click.
+      // Result: rate buttons un-gate, green/red feedback renders,
+      // option buttons lock.
+      return { ...state, answeredOption: true };
     case 'set-numeric-input':
       return { ...state, numericAnswerInput: action.value };
     default:
@@ -626,10 +729,16 @@ export default function ReviewSession() {
     if (!schedule) return [];
     const now = Date.now();
     
-    // 1. Filter out opted-out, future items, AND non-matching courses
+    // 1. Filter out opted-out, future items, skipped, AND non-matching courses
+    //    `skipped_at` (2026-07-31) means the student explicitly hit
+    //    "Skip" on the fail-open "Question unavailable" card; the
+    //    underlying item's next_review_at was pushed 30 days into
+    //    the future by skipReview(), but we also filter here as
+    //    belt-and-braces in case the push failed or wasn't applied.
     const filtered = schedule.filter(
       item =>
         !item.notification_opt_out &&
+        !item.skipped_at &&
         new Date(item.next_review_at).getTime() <= now &&
         (!targetCourseId || item.course_id === targetCourseId)
     );
@@ -743,6 +852,27 @@ export default function ReviewSession() {
   }
 
   function handleAdvance() {
+    dispatch({ type: 'advance' });
+  }
+
+  // Fail-open handler (2026-07-31): wired to the amber "Question
+  // unavailable" card's Skip button. Calls skipReview() to push
+  // next_review_at 30 days into the future and stamp skipped_at,
+  // then refetches the schedule and advances the local index. The
+  // 3 steps (mutate -> refetch -> advance) are sequential so the
+  // next-card display reflects the post-skip state, not the stale
+  // snapshot.
+  async function handleSkip() {
+    const item = state.dueQueue[state.currentIndex];
+    if (!item) return;
+    try {
+      await skipReview(studentId, item.question_id);
+    } catch (err) {
+      // Fail-open: even if the mutation throws, advance the card so
+      // the student isn't stuck on the broken card forever.
+      console.warn('[ReviewSession] skipReview threw, advancing anyway:', err);
+    }
+    await refetchSchedule();
     dispatch({ type: 'advance' });
   }
 
@@ -1192,7 +1322,48 @@ export default function ReviewSession() {
           )}
         </CardHeader>
         <CardContent className="space-y-3">
-          {question && question.options.length > 0 && (
+          {/* Fail-open (2026-07-31): if fetchQuestionForReview returned
+              the missing-question sentinel, show a Skip card instead of
+              the option list. The student clicks Skip to advance past
+              the broken card — the rest of the session continues
+              normally. Triggered by any review item whose question_id
+              isn't in MOCK_QUESTIONS (e.g. mock-question-cross-2 from
+              the spaced-repetition catalogue, or any future ID added
+              to MOCK_REVIEW_ITEMS without a matching MOCK_QUESTIONS
+              entry). */}
+          {question?.id === MISSING_QUESTION_ID && (
+            <div
+              className="rounded-lg border border-amber-300/60 bg-amber-50/60 dark:border-amber-700/40 dark:bg-amber-950/20 p-4 space-y-3"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="flex items-start gap-2">
+                <AlertTriangle
+                  className="h-4 w-4 text-amber-700 dark:text-amber-400 mt-0.5 shrink-0"
+                  aria-hidden="true"
+                />
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Question unavailable</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    This card references a question the demo mock set
+                    doesn’t know about. The original review queue entry
+                    is still on file — only the local demo data is
+                    missing.
+                  </div>
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => { void handleSkip(); }}
+                className="w-full"
+              >
+                Skip and continue
+              </Button>
+            </div>
+          )}
+          {question && question.id !== MISSING_QUESTION_ID && question.options.length > 0 && (
             // Knob 8 (Phase D prep, 2026-07-21): MCQ option list is now
             // interactive. Each option is a `<button type="button">` that
             // dispatches `toggle-option`. After `answeredOption === true`
@@ -1362,6 +1533,29 @@ export default function ReviewSession() {
         <CardContent className="py-4">
           {state.phase === 'awaiting-response' && (
             <div>
+              {/* MSQ commit button (2026-07-31): only rendered for
+                  SELECT_MANY_IN_LOT questions while the student is
+                  still building their selection. Once they have at
+                  least one option picked, "Confirm selection (N
+                  chosen)" becomes the bridge to the rate buttons.
+                  SOL cards skip this entirely — they auto-confirm on
+                  first click via the toggle-option reducer. */}
+              {question &&
+                question.type === 'SELECT_MANY_IN_LOT' &&
+                !state.answeredOption && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => dispatch({ type: 'commit-answer' })}
+                    disabled={state.selectedOptionIndices.length === 0}
+                    className="mb-3 w-full"
+                    aria-label="Confirm multi-select selection"
+                  >
+                    Confirm selection
+                    {state.selectedOptionIndices.length > 0 &&
+                      ` (${state.selectedOptionIndices.length} chosen)`}
+                  </Button>
+                )}
               <p
                 id="rating-prompt"
                 className="text-sm font-medium text-muted-foreground mb-3"
@@ -1453,23 +1647,61 @@ export default function ReviewSession() {
           )}
 
           {state.phase === 'showing-feedback' && (
-            <Button
-              ref={nextRef}
-              onClick={handleAdvance}
-              className="w-full"
-              size="lg"
-              aria-label={
-                state.currentIndex + 1 >= state.dueQueue.length
-                  ? 'Finish session (press Enter)'
-                  : 'Next card (press Enter)'
-              }
-              aria-keyshortcuts="Enter Space ArrowRight"
-            >
-              {state.currentIndex + 1 >= state.dueQueue.length
-                ? 'Finish session'
-                : 'Next card'}
-              <ChevronRight className="ml-2 h-4 w-4" aria-hidden="true" />
-            </Button>
+            <>
+              {/* Bug 1 fix (2026-08-01): remediation hint surfaced to the
+                  student. A1 rule: shown ONLY after the student answers
+                  incorrectly. Hidden otherwise so the teacher-set hint
+                  doesn't bias subsequent attempts (and so a correct
+                  first-try doesn't feel like a spoiler).
+
+                  Reads `state.dueQueue[state.currentIndex]?.remediation_hint`
+                  — the item the student just failed on. `submitReview` never
+                  mutates `remediation_hint` (only SM-2 fields), so the
+                  teacher-set value is stable through the review cycle.
+
+                  Style choice: always-visible (no toggle), calm blue card,
+                  matching the legacy `ReviewPage.tsx:143-146` pattern. The
+                  student has already committed an answer; the hint is now
+                  genuinely useful, not a spoiler. */}
+              {state.lastResponse?.isCorrect === false &&
+                state.dueQueue[state.currentIndex]?.remediation_hint && (
+                  <div
+                    role="note"
+                    aria-label="Teacher-set remediation hint"
+                    className="mb-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900"
+                  >
+                    <div className="flex items-start gap-2">
+                      <Lightbulb
+                        className="h-4 w-4 mt-0.5 flex-shrink-0 text-sky-600"
+                        aria-hidden="true"
+                      />
+                      <div>
+                        <p className="font-medium mb-1">Need a hint?</p>
+                        <p className="text-sky-800">
+                          {state.dueQueue[state.currentIndex]?.remediation_hint}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              <Button
+                ref={nextRef}
+                onClick={handleAdvance}
+                className="w-full"
+                size="lg"
+                aria-label={
+                  state.currentIndex + 1 >= state.dueQueue.length
+                    ? 'Finish session (press Enter)'
+                    : 'Next card (press Enter)'
+                }
+                aria-keyshortcuts="Enter Space ArrowRight"
+              >
+                {state.currentIndex + 1 >= state.dueQueue.length
+                  ? 'Finish session'
+                  : 'Next card'}
+                <ChevronRight className="ml-2 h-4 w-4" aria-hidden="true" />
+              </Button>
+            </>
           )}
 
           {state.phase === 'loading-question' && (

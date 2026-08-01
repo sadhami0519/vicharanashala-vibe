@@ -136,7 +136,7 @@ class SpacedRepetitionController {
   @Patch('/bulk/notifications')
   @HttpCode(200)
   @ResponseSchema(BulkUpdateOptOutResponse, {
-    description: 'Number of items updated',
+    description: 'Bulk notification opt-out result. Returns `studentsAffected` (distinct student count), `itemsAffected` (review-item count), `updatedCount` (alias of itemsAffected, deprecated), and a human-readable `message`.',
     statusCode: 200,
   })
   async bulkUpdateNotificationPreference(
@@ -145,6 +145,13 @@ class SpacedRepetitionController {
   ): Promise<BulkUpdateOptOutResponse> {
     this._assertAdmin(user);
     const { studentIds, courseId, optOut } = body;
+    // The service method is intentionally non-async and returns
+    // `Promise<Promise<...>>` (the outer Promise from the non-async
+    // wrapper, the inner one from `_withTransaction`). The `as unknown
+    // as Promise<...>` cast flattens that to the single-Promise shape
+    // `routing-controllers` expects. The response shape now matches
+    // `BulkUpdateOptOutResponse` exactly (Bug 3, 2026-08-01: dual-count
+    // fields), so no further shape adaptation is needed.
     return this.spacedRepetitionService.bulkUpdateNotificationPreference(
       studentIds,
       courseId,
@@ -178,7 +185,7 @@ class SpacedRepetitionController {
   @Patch('/bulk/exam-prep')
   @HttpCode(200)
   @ResponseSchema(BulkExamPrepResponse, {
-    description: 'Number of items updated',
+    description: 'Bulk exam-prep mode toggle result. Returns `studentsAffected` (distinct student count), `itemsAffected` (review-item count), `updatedCount` (alias of itemsAffected, deprecated), and a human-readable `message`.',
     statusCode: 200,
   })
   async bulkUpdateExamPrepMode(
@@ -187,6 +194,9 @@ class SpacedRepetitionController {
   ): Promise<BulkExamPrepResponse> {
     this._assertAdmin(user);
     const { studentIds, courseId, enabled } = body;
+    // See `bulkUpdateNotificationPreference` for the cast rationale
+    // (non-async wrapper returning `Promise<Promise<...>>`). Response
+    // shape matches `BulkExamPrepResponse` exactly (Bug 3, 2026-08-01).
     return this.spacedRepetitionService.bulkUpdateExamPrepMode(
       studentIds,
       courseId,

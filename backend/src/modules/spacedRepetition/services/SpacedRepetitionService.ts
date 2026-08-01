@@ -829,6 +829,18 @@ class SpacedRepetitionService extends BaseService {
    * Bulk updates the notification opt-out preference for multiple students
    * within a given course.
    * Called by the teacher dashboard for cohort-level management.
+   *
+   * Response shape (Bug 3 fix, 2026-08-01):
+   * - `updatedCount`: kept for back-compat. ALWAYS reflects the review
+   *   ITEM count, not student count. Any caller that wants a student
+   *   count should read `studentsAffected`. Do not present this number
+   *   as a student count in user-facing UI.
+   * - `studentsAffected`: distinct student count whose items were
+   *   actually mutated. Suitable for teacher-facing toasts.
+   * - `itemsAffected`: same as `updatedCount` but named honestly.
+   * - `message`: human-readable summary, e.g. "Updated notifications for
+   *   3 students (6 review items).". Uses `studentsAffected` for the
+   *   primary number.
    */
   bulkUpdateNotificationPreference(
     studentIds: string[],
@@ -836,22 +848,28 @@ class SpacedRepetitionService extends BaseService {
     optOut: boolean,
   ) {
     return this._withTransaction(async session => {
-      const modifiedCount = await this.reviewItemRepo.updateOptOutBulk(
-        studentIds,
-        courseId,
-        optOut,
-        session,
-      );
+      const { modifiedCount, distinctStudentsModified } =
+        await this.reviewItemRepo.updateOptOutBulk(
+          studentIds,
+          courseId,
+          optOut,
+          session,
+        );
 
-      return { 
+      return {
         updatedCount: modifiedCount,
-        message: `Updated notifications for ${modifiedCount} review items.` 
+        studentsAffected: distinctStudentsModified,
+        itemsAffected: modifiedCount,
+        message: `Updated notifications for ${distinctStudentsModified} student${distinctStudentsModified === 1 ? '' : 's'}${modifiedCount !== distinctStudentsModified ? ` (${modifiedCount} review item${modifiedCount === 1 ? '' : 's'})` : ''}.`,
       };
     });
   }
 
   /**
    * Bulk updates the exam prep mode for multiple students within a given course.
+   *
+   * See `bulkUpdateNotificationPreference` for the dual-count response
+   * shape rationale (Bug 3 fix, 2026-08-01 — item-count vs student-count).
    */
   bulkUpdateExamPrepMode(
     studentIds: string[],
@@ -859,16 +877,19 @@ class SpacedRepetitionService extends BaseService {
     enabled: boolean,
   ) {
     return this._withTransaction(async session => {
-      const modifiedCount = await this.reviewItemRepo.updateExamPrepBulk(
-        studentIds,
-        courseId,
-        enabled,
-        session,
-      );
+      const { modifiedCount, distinctStudentsModified } =
+        await this.reviewItemRepo.updateExamPrepBulk(
+          studentIds,
+          courseId,
+          enabled,
+          session,
+        );
 
-      return { 
+      return {
         updatedCount: modifiedCount,
-        message: `${enabled ? 'Enabled' : 'Disabled'} exam-prep mode for ${modifiedCount} review items.` 
+        studentsAffected: distinctStudentsModified,
+        itemsAffected: modifiedCount,
+        message: `${enabled ? 'Enabled' : 'Disabled'} exam-prep mode for ${distinctStudentsModified} student${distinctStudentsModified === 1 ? '' : 's'}${modifiedCount !== distinctStudentsModified ? ` (${modifiedCount} review item${modifiedCount === 1 ? '' : 's'})` : ''}.`,
       };
     });
   }

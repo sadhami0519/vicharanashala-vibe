@@ -225,9 +225,43 @@ export class BulkUpdateOptOutBody {
 
 /**
  * Response for PATCH /bulk/notifications
+ *
+ * Bug 3 fix (2026-08-01): the response now distinguishes between the
+ * number of distinct students whose items were mutated
+ * (`studentsAffected`) and the raw review-item count (`itemsAffected`).
+ * Previously the response only had `updatedCount`, which was always the
+ * item count but was being mislabelled as a student count in the
+ * teacher UI. The frontend toast must use `studentsAffected` for any
+ * "for N students" wording.
+ *
+ * `updatedCount` is kept for back-compat with any external consumer
+ * that already reads it. It is ALWAYS the item count (alias of
+ * `itemsAffected`) and must NOT be presented as a student count.
  */
 export class BulkUpdateOptOutResponse {
+  /**
+   * @deprecated Item count, NOT student count. Use `studentsAffected`
+   *   for student-facing UI and `itemsAffected` when item-level accuracy
+   *   matters. Kept so existing consumers don't break.
+   */
   updatedCount: number;
+
+  /**
+   * Number of distinct students whose review items were actually
+   * mutated. Suitable for teacher-facing UI ("Updated for 3 students").
+   */
+  studentsAffected: number;
+
+  /**
+   * Number of ReviewItem docs the bulk update actually changed
+   * (Mongo `modifiedCount` semantics).
+   */
+  itemsAffected: number;
+
+  /**
+   * Human-readable summary, e.g.
+   * "Updated notifications for 3 students (6 review items).".
+   */
   message: string;
 }
 
@@ -250,9 +284,21 @@ export class BulkExamPrepBody {
 
 /**
  * Response for PATCH /bulk/exam-prep
+ *
+ * See `BulkUpdateOptOutResponse` for the dual-count rationale (Bug 3,
+ * 2026-08-01). Same shape; same `updatedCount` back-compat rule.
  */
 export class BulkExamPrepResponse {
+  /** @deprecated Item count, NOT student count. See BulkUpdateOptOutResponse. */
   updatedCount: number;
+
+  /** Distinct student count whose items were mutated. */
+  studentsAffected: number;
+
+  /** Raw review-item count mutated (Mongo `modifiedCount`). */
+  itemsAffected: number;
+
+  /** Human-readable summary, e.g. "Enabled exam-prep mode for 3 students.". */
   message: string;
 }
 

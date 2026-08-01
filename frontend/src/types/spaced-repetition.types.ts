@@ -26,6 +26,16 @@ export interface ReviewItem {
    * retention dashboard / cohort table.
    */
   source?: 'auto-seed' | 'manual';
+  /**
+   * Mock-only breadcrumb (2026-07-31): timestamp at which the student
+   * explicitly skipped this review card because the question wasn't
+   * findable in the mock set. Used by the fail-open flow in
+   * ReviewSession.tsx so the broken card doesn't reappear on every
+   * page reload. The mock item is *not* deleted — teachers can still
+   * see it in cohort views; only the student-side "due" filter hides
+   * it. Ignored entirely in the live (USE_MOCK=false) code path.
+   */
+  skipped_at?: string | null;
 }
 
 export interface CourseRetentionSummary {
@@ -82,4 +92,32 @@ export interface SubmitReviewResponse {
 
 export interface UpdateOptOutResponse {
   updatedCount: number;
+}
+
+/**
+ * Response shape for the teacher bulk-toggle endpoints
+ * (PATCH /api/spaced-repetition/bulk/notifications and
+ * PATCH /api/spaced-repetition/bulk/exam-prep).
+ *
+ * Bug 3 fix (2026-08-01): the response now distinguishes between the
+ * number of distinct students whose items were mutated
+ * (`studentsAffected`) and the raw review-item count (`itemsAffected`).
+ * Previously the response only had `updatedCount`, which was always the
+ * item count but was being mislabelled as a student count in the
+ * teacher UI. UI must use `studentsAffected` for any "for N students"
+ * wording.
+ *
+ * `updatedCount` is kept for back-compat. It is ALWAYS the item count
+ * (alias of `itemsAffected`) and must NOT be presented as a student
+ * count in user-facing UI.
+ */
+export interface BulkUpdateResponse {
+  /** @deprecated Item count, NOT student count. Use `studentsAffected` for student-facing UI and `itemsAffected` when item-level accuracy matters. */
+  updatedCount: number;
+  /** Distinct student count whose items were mutated. Use this in teacher toasts. */
+  studentsAffected: number;
+  /** Raw review-item count mutated. Same value as `updatedCount`. */
+  itemsAffected: number;
+  /** Human-readable summary, e.g. "Updated notifications for 3 students (6 review items)." */
+  message: string;
 }

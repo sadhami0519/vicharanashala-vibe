@@ -5,6 +5,7 @@
   SeedScheduleResponse,
   SubmitReviewResponse,
   UpdateOptOutResponse,
+  BulkUpdateResponse,
 } from '@/types/spaced-repetition.types';
 
 // â”€â”€ Toggle this to false when the backend is ready â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -428,6 +429,58 @@ export async function submitReview(
 }
 
 /**
+ * Skip a review card whose question isn't findable in the mock set.
+ * Added 2026-07-31 as the second half of the missing-question
+ * fail-open flow (see also ReviewSession.tsx's MISSING_QUESTION_RESPONSE
+ * sentinel + amber "Question unavailable" card).
+ *
+ * Mock behavior: pushes `next_review_at` 30 days into the future and
+ * stamps `skipped_at` with the current timestamp. EF / n / interval
+ * are intentionally untouched — the student didn't fail; the data is
+ * bad. The student-side "due" filter (next_review_at <= now) excludes
+ * the item; the teacher-side cohort view still sees it (so they can
+ * notice and fix the underlying mock data).
+ *
+ * Live behavior: the backend doesn't expose this yet. Fail-open:
+ * warn in dev and return { ok: true } so the UI flow isn't blocked.
+ * The skip will NOT persist across reloads in live mode — callers
+ * should treat the live response as best-effort.
+ */
+export async function skipReview(
+  studentId: string,
+  questionId: string,
+): Promise<{ ok: true }> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 100));
+    const idx = MOCK_REVIEW_ITEMS.findIndex(
+      i => i.student_id === studentId && i.question_id === questionId,
+    );
+    if (idx === -1) {
+      // Already gone — silent no-op. Refreshing the schedule would
+      // have removed it; no need to throw.
+      return { ok: true };
+    }
+    const item = MOCK_REVIEW_ITEMS[idx];
+    const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+    MOCK_REVIEW_ITEMS[idx] = {
+      ...item,
+      next_review_at: new Date(Date.now() + thirtyDays).toISOString(),
+      skipped_at: new Date().toISOString(),
+    };
+    persistMockState();
+    return { ok: true };
+  }
+  // Live path: backend has no skip endpoint. Fail-open so the UI
+  // isn't blocked; warn in dev so the gap is visible.
+  if (import.meta.env.DEV) {
+    console.warn(
+      '[spaced-repetition-api] skipReview: live backend has no skip endpoint yet; UI skip will not persist across reloads.',
+    );
+  }
+  return { ok: true };
+}
+
+/**
  * Get the full review schedule for a student across all courses.
  * GET /api/spaced-repetition/:studentId/schedule
  */
@@ -554,57 +607,90 @@ export async function setRemediationHint(
 /**
  * Bulk toggle notification opt-out for a cohort.
  * PATCH /api/spaced-repetition/bulk/notifications
+ *
+ * Returns `BulkUpdateResponse` (Bug 3 fix, 2026-08-01): distinct student
+ * count AND item count are reported separately so the teacher UI can
+ * say "Updated for 3 students" instead of mislabelling item counts as
+ * student counts. See `BulkUpdateResponse` in
+ * `spaced-repetition.types.ts` for the full shape rationale.
  */
 export async function bulkUpdateNotificationPreference(
   courseId: string,
   studentIds: string[],
   optOut: boolean,
-): Promise<{ updatedCount: number }> {
+): Promise<BulkUpdateResponse> {
   if (USE_MOCK) {
     await new Promise(r => setTimeout(r, 400));
-    let count = 0;
     const studentIdSet = new Set(studentIds);
+    const distinctStudentsTouched = new Set<string>();
+    let itemsChanged = 0;
     MOCK_REVIEW_ITEMS.forEach((item, idx) => {
       if (item.course_id === courseId && studentIdSet.has(item.student_id)) {
         MOCK_REVIEW_ITEMS[idx] = { ...item, notification_opt_out: optOut };
-        count++;
+        distinctStudentsTouched.add(item.student_id);
+        itemsChanged++;
       }
     });
-    if (count > 0) persistMockState();
-    return { updatedCount: count };
+    if (itemsChanged > 0) persistMockState();
+    const studentsAffected = distinctStudentsTouched.size;
+    const trailing =
+      itemsChanged !== studentsAffected
+        ? ` (${itemsChanged} review item${itemsChanged === 1 ? '' : 's'})`
+        : '';
+    return {
+      updatedCount: itemsChanged,
+      studentsAffected,
+      itemsAffected: itemsChanged,
+      message: `Updated notifications for ${studentsAffected} student${studentsAffected === 1 ? '' : 's'}${trailing}.`,
+    };
   }
   return apiFetch(`/api/spaced-repetition/bulk/notifications`, {
     method: 'PATCH',
     body: JSON.stringify({ courseId, studentIds, optOut }),
-  });
+  }) as unknown as Promise<BulkUpdateResponse>;
 }
 
 /**
  * Bulk toggle exam-prep mode for a cohort.
  * PATCH /api/spaced-repetition/bulk/exam-prep
+ *
+ * Returns `BulkUpdateResponse` (Bug 3 fix, 2026-08-01). See
+ * `bulkUpdateNotificationPreference` for the dual-count rationale.
  */
 export async function bulkUpdateExamPrepMode(
   courseId: string,
   studentIds: string[],
   enabled: boolean,
-): Promise<{ updatedCount: number }> {
+): Promise<BulkUpdateResponse> {
   if (USE_MOCK) {
     await new Promise(r => setTimeout(r, 400));
-    let count = 0;
     const studentIdSet = new Set(studentIds);
+    const distinctStudentsTouched = new Set<string>();
+    let itemsChanged = 0;
     MOCK_REVIEW_ITEMS.forEach((item, idx) => {
       if (item.course_id === courseId && studentIdSet.has(item.student_id)) {
         MOCK_REVIEW_ITEMS[idx] = { ...item, exam_prep_mode: enabled };
-        count++;
+        distinctStudentsTouched.add(item.student_id);
+        itemsChanged++;
       }
     });
-    if (count > 0) persistMockState();
-    return { updatedCount: count };
+    if (itemsChanged > 0) persistMockState();
+    const studentsAffected = distinctStudentsTouched.size;
+    const trailing =
+      itemsChanged !== studentsAffected
+        ? ` (${itemsChanged} review item${itemsChanged === 1 ? '' : 's'})`
+        : '';
+    return {
+      updatedCount: itemsChanged,
+      studentsAffected,
+      itemsAffected: itemsChanged,
+      message: `${enabled ? 'Enabled' : 'Disabled'} exam-prep mode for ${studentsAffected} student${studentsAffected === 1 ? '' : 's'}${trailing}.`,
+    };
   }
   return apiFetch(`/api/spaced-repetition/bulk/exam-prep`, {
     method: 'PATCH',
     body: JSON.stringify({ courseId, studentIds, enabled }),
-  });
+  }) as unknown as Promise<BulkUpdateResponse>;
 }
 
 /**
