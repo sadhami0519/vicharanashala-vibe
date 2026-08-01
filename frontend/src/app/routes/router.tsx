@@ -527,6 +527,20 @@ const studentLeaderboardRoute = new Route({
   getParentRoute: () => studentLayoutRoute,
   path: '/leaderboard',
   component: Leaderboard,
+  // Accept optional preselection from the retention dashboard's
+  // per-course "View leaderboard" link (see RetentionDashboard.tsx).
+  // NOT-TO-COMMIT (config file per AGENTS.md rule 4): only commit when
+  // Emie explicitly approves this specific file change.
+  validateSearch: (search: Record<string, unknown>): {
+    courseId?: string;
+    courseVersionId?: string;
+  } => ({
+    courseId: typeof search.courseId === 'string' ? search.courseId : undefined,
+    courseVersionId:
+      typeof search.courseVersionId === 'string'
+        ? search.courseVersionId
+        : undefined,
+  }),
 });
 
 // Student profile route
