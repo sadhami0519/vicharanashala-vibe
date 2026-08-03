@@ -11,6 +11,8 @@ import {
   bulkUpdateNotificationPreference,
   bulkUpdateExamPrepMode,
   getCourseStudents,
+  getCourseStudentsRich,
+  getCourses,
   resetReview,
   getStudentSRStatus,
   setStudentSRDisabled,
@@ -201,11 +203,37 @@ export function useBulkUpdateExamPrep() {
   });
 }
 
+/**
+ * useGetCourses (added 2026-08-03).
+ * Returns the list of courses the teacher can manage, with student-count
+ * chips so the teacher can pick a course by name instead of typing IDs.
+ */
+export function useGetCourses() {
+  return useQuery({
+    queryKey: ['spaced-repetition', 'courses'] as const,
+    queryFn: () => getCourses(),
+  });
+}
+
 export function useGetCourseStudents(courseId: string) {
   return useQuery({
     queryKey: spacedRepetitionKeys.courseStudents(courseId),
     queryFn: () => getCourseStudents(courseId),
     enabled: !!courseId && courseId.length > 5, // Only run if a plausible courseId is typed
+  });
+}
+
+/**
+ * Rich variant of useGetCourseStudents (added 2026-08-03).
+ * Returns human-readable student rows (name + email) instead of raw IDs.
+ * Used by the new teacher SR dashboards; legacy useGetCourseStudents
+ * stays for backward compat with any other consumers.
+ */
+export function useGetCourseStudentsRich(courseId: string) {
+  return useQuery({
+    queryKey: [...spacedRepetitionKeys.courseStudents(courseId), 'rich'] as const,
+    queryFn: () => getCourseStudentsRich(courseId),
+    enabled: !!courseId && courseId.length > 5, // Same enablement rule as the legacy hook
   });
 }
 

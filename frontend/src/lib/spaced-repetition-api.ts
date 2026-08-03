@@ -6,7 +6,10 @@
   SubmitReviewResponse,
   UpdateOptOutResponse,
   BulkUpdateResponse,
+  TeacherCourseSummary,
+  EnrichedStudent,
 } from '@/types/spaced-repetition.types';
+import { recordReviewToday, clearStreak } from './streak';
 
 // â”€â”€ Toggle this to false when the backend is ready â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const USE_MOCK = true;
@@ -55,6 +58,7 @@ export function resetMockState(): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.removeItem(MOCK_STORAGE_KEY);
+    clearStreak(); // also wipe the daily-review streak (added 2026-08-03)
     window.location.reload();
   } catch (err) {
     console.warn('[spaced-repetition-api] Failed to reset mock state:', err);
@@ -87,6 +91,56 @@ export const DEMO_STUDENT_EMAILS: ReadonlySet<string> = new Set([
 ]);
 export function isDemoStudentEmail(email: string | null | undefined): boolean {
   return !!email && DEMO_STUDENT_EMAILS.has(email);
+}
+
+// Human-readable mock directory (added 2026-08-03)
+// In mock mode the IDs in MOCK_REVIEW_ITEMS are opaque strings
+// ('mock-course-1', 'stu-helper-A', Firebase UIDs). For the SR teacher
+// dashboard we need to show real-looking names + emails instead of asking
+// teachers to type IDs by hand. These maps provide that. Live mode will
+// resolve names via the backend (see backend/src/modules/spacedRepetition).
+// Adding a new mock student/course? Add the entry here AND add the
+// corresponding item to MOCK_REVIEW_ITEMS. Missing entries fall back
+// gracefully via studentDisplay() / courseDisplay() (id prefix).
+
+export interface StudentDisplay {
+  name: string;
+  email: string;
+}
+
+export interface CourseDisplay {
+  name: string;
+}
+
+export const MOCK_COURSE_DIRECTORY: Readonly<Record<string, CourseDisplay>> = Object.freeze({
+  'mock-course-1': { name: 'Demo Spaced Repetition Course' },
+  'mock-course-2': { name: 'CS Algorithms - Extended' },
+});
+
+export const MOCK_STUDENT_DIRECTORY: Readonly<Record<string, StudentDisplay>> = Object.freeze({
+  [DEMO_STUDENT_ID]: { name: 'Riya Sharma', email: 'student@test.com' },
+  'stu-helper-002':  { name: 'Arjun Mehta', email: 'arjun.m@test.com' },
+  'stu-helper-A':    { name: 'Priya Iyer',  email: 'priya.i@test.com' },
+  'stu-helper-B':    { name: 'Karthik Rao', email: 'karthik.r@test.com' },
+  'NQTDHq8CSa0GDNpjzUv8IFjZAifM': {
+    name: 'Demo (Knob Test)',
+    email: 'knob-test@example.com',
+  },
+});
+
+/** Resolves a student id to its display info; never throws. */
+export function studentDisplay(studentId: string): StudentDisplay {
+  return MOCK_STUDENT_DIRECTORY[studentId] ?? {
+    name: `Student ${studentId.slice(0, 6)}`,
+    email: `${studentId.slice(0, 6)}@unknown.local`,
+  };
+}
+
+/** Resolves a course id to its display info; never throws. */
+export function courseDisplay(courseId: string): CourseDisplay {
+  return MOCK_COURSE_DIRECTORY[courseId] ?? {
+    name: `Course ${courseId.slice(0, 8)}`,
+  };
 }
 
 // Seed array â€” the initial state used when localStorage has no mock payload
@@ -384,10 +438,45 @@ export async function submitReview(
 
     // Mutate in place so the change survives logout/login via localStorage.
     // Faithful-enough SM-2: q in {5,3,1}, EF delta formula, intervals.
+    // Interval logic mirrors backend `_applySM2` — on a wrong answer
+    // (newN === 0), reset to 1 day; otherwise the standard SM-2 progression
+    // (1, 6, then round(interval * EF)).
     const q5 = effectiveQuality === 'got_it' ? 5 : effectiveQuality === 'unsure' ? 3 : 1;
     const newEF = Math.max(1.3, item.EF + (0.1 - (5 - q5) * (0.08 + (5 - q5) * 0.02)));
-    const newN = q5 < 3 ? 0 : item.n + 1;
-    const nextInterval = newN === 1 ? 1 : newN === 2 ? 6 : Math.round(item.interval_days * newEF);
+    let newN = q5 < 3 ? 0 : item.n + 1;
+    let nextInterval: number;
+    if (newN === 0) {
+      // Wrong answer: reset interval to 1 day regardless of prior n.
+      nextInterval = 1;
+    } else if (newN === 1) {
+      nextInterval = 1;
+    } else if (newN === 2) {
+      nextInterval = 6;
+    } else {
+      // Correct at n >= 3: compound the prior interval by EF.
+      nextInterval = Math.round(item.interval_days * newEF);
+    }
+    // Regression guard (added 2026-08-01): SM-2 invariant — a missed
+    // answer (newN === 0) MUST reset interval to 1 day. If this fires,
+    // the interval-branching above has regressed; mirror backend
+    // `_applySM2` in SpacedRepetitionService.ts. Stripped by bundler
+    // in prod, but visible in devtools when running against USE_MOCK=true.
+    console.assert(
+      newN !== 0 || nextInterval === 1,
+      '[SM-2 mock] missed answer did not reset interval to 1 day',
+      { newN, nextInterval, priorInterval: item.interval_days, priorN: item.n },
+    );
+    // Wrong-answer override (2026-08-03): when the objective answer was
+    // wrong (Knob 8c), force a full SM-2 reset (n=0, interval=1d) regardless
+    // of which button the student pressed. Without this, a wrong pick +
+    // `got_it` (capped to `unsure`, q=3) on an item with prior n>=2 still
+    // produces interval = round(prior * EF) — e.g. 16 * 2.56 ≈ 41 days —
+    // which contradicts the amber "Downgraded" notice shown to the user.
+    // Mirrors the backend override in `SpacedRepetitionService.submitReview`.
+    if (isCorrect === false) {
+      newN = 0;
+      nextInterval = 1;
+    }
     const updated: ReviewItem = {
       ...item,
       n: newN,
@@ -420,6 +509,10 @@ export async function submitReview(
     if (revealedCanonical !== undefined) {
       response.canonicalAnswer = revealedCanonical;
     }
+    // Streak update (added 2026-08-03): record the day the student completed
+    // a review. Side-effect-only; the returned state lives in localStorage
+    // and is read by RetentionDashboard / ReviewSession via loadStreak().
+    recordReviewToday();
     return response;
   }
   return apiFetch(`/api/spaced-repetition/${studentId}/review`, {
@@ -708,6 +801,61 @@ export async function getCourseStudents(courseId: string): Promise<{ studentIds:
     return { studentIds: students };
   }
   return apiFetch(`/api/spaced-repetition/courses/${courseId}/students`);
+}
+
+/**
+ * List courses the teacher can manage (added 2026-08-03).
+ * In mock mode we derive the list from the unique course_ids in
+ * MOCK_REVIEW_ITEMS (the teacher's view sees everything with a schedule).
+ * Live mode hits GET /api/spaced-repetition/courses which returns courses
+ * filtered by instructor ownership.
+ */
+export async function getCourses(): Promise<TeacherCourseSummary[]> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 300));
+    const counts = new Map<string, Set<string>>();
+    MOCK_REVIEW_ITEMS.forEach((item) => {
+      const set = counts.get(item.course_id) ?? new Set<string>();
+      set.add(item.student_id);
+      counts.set(item.course_id, set);
+    });
+    return Array.from(counts.entries()).map(([id, students]) => ({
+      id,
+      name: courseDisplay(id).name,
+      studentCount: students.size,
+    }));
+  }
+  const res = await apiFetch<{ courses: TeacherCourseSummary[] }>(
+    '/api/spaced-repetition/courses',
+  );
+  return res.courses ?? [];
+}
+
+/**
+ * Rich variant of getCourseStudents (added 2026-08-03).
+ * Returns human-readable student info instead of raw IDs. Backward-compat
+ * note: getCourseStudents above is unchanged; new UI components consume
+ * this rich variant instead.
+ */
+export async function getCourseStudentsRich(
+  courseId: string,
+): Promise<{ students: EnrichedStudent[] }> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 400));
+    const ids = Array.from(new Set(
+      MOCK_REVIEW_ITEMS.filter(i => i.course_id === courseId).map(i => i.student_id),
+    ));
+    return {
+      students: ids.map((id) => {
+        const d = studentDisplay(id);
+        return { id, name: d.name, email: d.email };
+      }),
+    };
+  }
+  const res = await apiFetch<{ students: EnrichedStudent[] }>(
+    `/api/spaced-repetition/courses/${courseId}/students-rich`,
+  );
+  return { students: res.students ?? [] };
 }
 
 /**

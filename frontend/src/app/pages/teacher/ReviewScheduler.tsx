@@ -11,20 +11,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Loader2, Zap, PauseCircle, PlayCircle, GraduationCap, Users, BookOpen, BrainCircuit, MessageSquareText, RotateCcw, CheckSquare, Square, Ban, Power, Send, Library } from "lucide-react";
+import { Loader2, Zap, PauseCircle, PlayCircle, GraduationCap, BookOpen, BrainCircuit, MessageSquareText, RotateCcw, Ban, Power, Send, Library } from "lucide-react";
 import { toast } from "sonner";
 import {
   useBoostReview,
   useSetRemediationHint,
   useBulkUpdateNotifications,
   useBulkUpdateExamPrep,
-  useGetCourseStudents,
+  useGetCourses,
+  useGetCourseStudentsRich,
   useResetReview,
   useBulkSetStudentSRDisabled,
   useGetAssignableQuestions,
   useAssignReview,
 } from "@/hooks/spaced-repetition-hooks";
-import { resetMockState } from "@/lib/spaced-repetition-api";
+import { resetMockState, studentDisplay } from "@/lib/spaced-repetition-api";
+import { CourseSelectCard } from "@/components/sr-teacher/CourseSelectCard";
+import { StudentListPanel } from "@/components/sr-teacher/StudentListPanel";
 import { InfoPopover } from "@/components/InfoPopover";
 import {
   SPACED_REPETITION_INFO_TITLE,
@@ -48,15 +51,20 @@ export default function ReviewScheduler() {
   const bulkExamPrepMutation = useBulkUpdateExamPrep();
   const bulkSRDisabledMutation = useBulkSetStudentSRDisabled();
 
-  // Fetch students who have schedules for this course
-  const { data: studentsData, isLoading: isLoadingStudents } = useGetCourseStudents(courseId);
+  // Fetch courses for the teacher (added 2026-08-03) + students in the selected course.
+  // The course list drives CourseSelectCard; the student list drives StudentListPanel.
+  const { data: coursesData } = useGetCourses();
+  const coursesList = coursesData;
+  const { data: studentsData } = useGetCourseStudentsRich(courseId);
   
-  // Create a list of objects with a simulated "Name" so the UI is human-readable.
-  // We will replace this simulation once the backend passes real names.
-  const enrolledStudents = (studentsData?.studentIds || []).map(id => ({
-    id,
-    name: `Student ${id.substring(0, 5).toUpperCase()}` // Simulated Name
+  // Derive the visible list of enrolled students with id + name.
+  // Both fields are kept (id is still needed by bulk mutations).
+  const enrolledStudents = (studentsData?.students || []).map(s => ({
+    id: s.id,
+    name: s.name,
   }));
+  // `students` for the new panel component (rich shape, with email).
+  const richStudents = studentsData?.students;
 
   const toggleSelectAll = () => {
     if (selectedStudents.length === enrolledStudents.length) {
@@ -245,55 +253,25 @@ export default function ReviewScheduler() {
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           
-          {/* LEFT COLUMN: Selection Funnel */}
+          {/* LEFT COLUMN: Selection Funnel (CourseSelectCard + StudentListPanel,
+              added 2026-08-03 to replace the previous free-text Input + inline list.
+              Both new components are self-contained Cards; the section header
+              is preserved above as a description. */}
           <div className="lg:col-span-5 space-y-6">
-            <Card className="bg-card/60 backdrop-blur-sm border-border/50 shadow-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg flex items-center gap-2"><Users className="h-5 w-5 text-primary"/> 1. Select Targets</CardTitle>
-                <CardDescription>Enter a Course ID to load enrolled students.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Input 
-                  placeholder="Enter Course ID..." 
-                  value={courseId}
-                  onChange={(e) => setCourseId(e.target.value)}
-                  className="h-11 border-primary/20"
-                />
-                
-                {courseId && (
-                  <div className="border border-border/50 rounded-xl bg-background/50 overflow-hidden flex flex-col h-[380px]">
-                    <div className="p-3 bg-muted/30 border-b flex justify-between items-center shrink-0">
-                      <span className="font-medium text-sm">
-                        {isLoadingStudents ? <Loader2 className="h-4 w-4 animate-spin" /> : `${enrolledStudents.length} Students`}
-                      </span>
-                      <Button variant="ghost" size="sm" onClick={toggleSelectAll} disabled={isLoadingStudents || enrolledStudents.length === 0} className="h-8 text-xs">
-                        {selectedStudents.length === enrolledStudents.length && enrolledStudents.length > 0 ? "Deselect All" : "Select All"}
-                      </Button>
-                    </div>
-                    
-                    <div className="overflow-y-auto p-2 flex-1 space-y-1">
-                      {enrolledStudents.length === 0 && !isLoadingStudents ? (
-                        <p className="text-sm text-muted-foreground text-center p-4">No students found with active schedules.</p>
-                      ) : (
-                        enrolledStudents.map(student => {
-                          const isSelected = selectedStudents.includes(student.id);
-                          return (
-                            <button
-                              key={student.id}
-                              onClick={() => toggleStudent(student.id)}
-                              className={`w-full flex items-center gap-3 p-2.5 rounded-lg text-sm transition-colors text-left ${isSelected ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-muted text-foreground'}`}
-                            >
-                              {isSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-muted-foreground" />}
-                              {student.name}
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <CourseSelectCard
+              courses={coursesList}
+              selectedCourseId={courseId || null}
+              onSelect={(id) => {
+                setCourseId(id);
+                setSelectedStudents([]); // clear stale selection from a previous course
+              }}
+            />
+            <StudentListPanel
+              students={courseId ? richStudents : undefined}
+              selectedStudentIds={selectedStudents}
+              onToggle={toggleStudent}
+              onToggleAll={toggleSelectAll}
+            />
           </div>
 
           {/* RIGHT COLUMN: Actions */}
@@ -411,7 +389,7 @@ export default function ReviewScheduler() {
                 >
                   <Send className="mr-2 h-4 w-4" /> Assign a Review to{' '}
                   {selectedStudents.length === 1
-                    ? `Student ${selectedStudents[0].substring(0, 5).toUpperCase()}`
+                    ? studentDisplay(selectedStudents[0]).name
                     : 'Selected Student'}
                 </Button>
               </CardContent>
@@ -465,7 +443,7 @@ export default function ReviewScheduler() {
                 <>
                   Pick a question to put on{' '}
                   <span className="font-medium text-foreground">
-                    Student {assignForStudent.substring(0, 5).toUpperCase()}
+                    {studentDisplay(assignForStudent).name}
                   </span>
                   's next-review queue. The student will see it on their next
                   visit to the review screen.

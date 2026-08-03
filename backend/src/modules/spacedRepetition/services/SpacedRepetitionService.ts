@@ -402,6 +402,25 @@ class SpacedRepetitionService extends BaseService {
 
       const updatedState = this._applySM2(item, effectiveQuality);
 
+      // Wrong-answer override (2026-08-03): when the objective answer was
+      // wrong (Knob 8c), force a full SM-2 reset (n=0, interval=1d) regardless
+      // of which button the student pressed. Without this, a wrong pick +
+      // `got_it` (capped to `unsure`, q=3) on an item with prior n>=2 still
+      // produces interval = round(prior * EF) — e.g. 16 * 2.56 ≈ 41 days —
+      // which contradicts the amber "Downgraded" notice shown to the user.
+      // EF delta is preserved from the q=3 path (partial-credit honest
+      // self-assessment penalty); only the streak/interval are reset.
+      // Mirrors the mock override in
+      // frontend/src/lib/spaced-repetition-api.ts submitReview().
+      if (isCorrect === false) {
+        updatedState.n = 0;
+        updatedState.interval_days = 1;
+        updatedState.next_review_at = new Date(updatedState.last_reviewed_at);
+        updatedState.next_review_at.setDate(
+          updatedState.next_review_at.getDate() + 1,
+        );
+      }
+
       const updated = await this.reviewItemRepo.update(
         item._id.toString(),
         updatedState,

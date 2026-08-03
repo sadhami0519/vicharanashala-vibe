@@ -269,3 +269,132 @@ describe('SM-2 Algorithm — _applySM2', () => {
     });
   });
 });
+
+// ── Test helper: full submitReview flow with quality cap + wrong-answer override ─
+// Mirrors SpacedRepetitionService.submitReview(): quality cap (Knob 8c)
+// followed by _applySM2 followed by the wrong-answer override (2026-08-03).
+// Keep in sync with SpacedRepetitionService.submitReview.
+
+function applySubmitReview(
+  item: { n: number; EF: number; interval_days: number },
+  quality: RecallQuality,
+  isCorrect?: boolean,
+) {
+  // Knob 8c: cap got_it → unsure on wrong pick
+  let effectiveQuality: RecallQuality = quality;
+  if (isCorrect === false && quality === 'got_it') {
+    effectiveQuality = 'unsure';
+  }
+
+  const result = applySM2(item, effectiveQuality);
+
+  // Wrong-answer override (2026-08-03): force n=0, interval=1d on any wrong
+  // pick, regardless of button. EF delta from q=3 path is preserved
+  // (partial-credit honest self-assessment penalty).
+  if (isCorrect === false) {
+    result.n = 0;
+    result.interval_days = 1;
+    result.next_review_at = new Date(result.last_reviewed_at);
+    result.next_review_at.setDate(result.next_review_at.getDate() + 1);
+  }
+
+  return { result, effectiveQuality };
+}
+
+describe('SpacedRepetitionService — wrong-answer override (2026-08-03)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('Wrong pick + got_it (was 41-day demo bug)', () => {
+    it('resets n=0, interval_days=1; EF delta from q=3 path preserved', () => {
+      // The exact demo state that produced 41 days: n=2, EF=2.7, I=16.
+      const item = makeItem({ n: 2, EF: 2.7, interval_days: 16 });
+      const { result, effectiveQuality } = applySubmitReview(item, 'got_it', false);
+
+      // Knob 8c downgraded got_it → unsure
+      expect(effectiveQuality).toBe('unsure');
+
+      // Override reset the streak
+      expect(result.n).toBe(0);
+      expect(result.interval_days).toBe(1);
+      expect(result.next_review_at.getTime()).toBe(
+        result.last_reviewed_at.getTime() + 1 * 24 * 60 * 60 * 1000,
+      );
+
+      // EF delta from q=3 (unsure) path is preserved, NOT reset to prior EF.
+      // EF delta for q=3: 0.1 - 2*(0.08+2*0.02) = 0.1 - 0.16 - 0.08 = -0.14
+      // So EF should be 2.7 - 0.14 = 2.56, NOT 2.7 (which would be the q=1 path).
+      expect(result.EF).toBeCloseTo(2.56, 2);
+    });
+  });
+
+  describe('Wrong pick + unsure', () => {
+    it('resets n=0, interval_days=1; no Knob 8c downgrade (already unsure)', () => {
+      const item = makeItem({ n: 2, EF: 2.7, interval_days: 16 });
+      const { result, effectiveQuality } = applySubmitReview(item, 'unsure', false);
+
+      // Quality stays as-is — unsure on wrong pick is not capped further
+      expect(effectiveQuality).toBe('unsure');
+
+      // But the streak/interval still reset
+      expect(result.n).toBe(0);
+      expect(result.interval_days).toBe(1);
+      expect(result.EF).toBeCloseTo(2.56, 2);
+    });
+  });
+
+  describe('Wrong pick + missed', () => {
+    it('resets n=0, interval_days=1; EF unchanged (SM-2 q<3 spec, no override delta)', () => {
+      const item = makeItem({ n: 2, EF: 2.7, interval_days: 16 });
+      const { result, effectiveQuality } = applySubmitReview(item, 'missed', false);
+
+      // q=1 path: n=0, I=1, EF unchanged at 2.7
+      expect(effectiveQuality).toBe('missed');
+      expect(result.n).toBe(0);
+      expect(result.interval_days).toBe(1);
+      expect(result.EF).toBe(2.7);
+    });
+  });
+
+  describe('Correct pick — override must NOT fire', () => {
+    it('correct + got_it: standard SM-2 advance, no reset', () => {
+      const item = makeItem({ n: 2, EF: 2.5, interval_days: 6 });
+      const { result, effectiveQuality } = applySubmitReview(item, 'got_it', true);
+
+      expect(effectiveQuality).toBe('got_it');
+      expect(result.n).toBe(3);
+      expect(result.interval_days).toBe(15); // round(6 * 2.5)
+      expect(result.EF).toBeCloseTo(2.6, 2);
+    });
+
+    it('correct + unsure: standard SM-2 advance, no reset', () => {
+      const item = makeItem({ n: 2, EF: 2.5, interval_days: 6 });
+      const { result, effectiveQuality } = applySubmitReview(item, 'unsure', true);
+
+      expect(effectiveQuality).toBe('unsure');
+      expect(result.n).toBe(3);
+      expect(result.interval_days).toBe(15);
+      // EF delta for q=3: 2.5 - 0.14 = 2.36
+      expect(result.EF).toBeCloseTo(2.36, 2);
+    });
+  });
+
+  describe('Undefined isCorrect (e.g. NAT parse failure)', () => {
+    it('override does NOT fire when isCorrect is undefined', () => {
+      // Same item + got_it, but isCorrect is undefined (we couldn't grade).
+      // The Knob 8c cap also doesn't fire (only fires on isCorrect === false).
+      // So this behaves like standard SM-2 — possibly advancing interval
+      // despite unknown correctness. Documented behavior.
+      const item = makeItem({ n: 2, EF: 2.7, interval_days: 16 });
+      const { result, effectiveQuality } = applySubmitReview(item, 'got_it', undefined);
+
+      expect(effectiveQuality).toBe('got_it');
+      expect(result.n).toBe(3);
+      // SM-2 semantics: interval uses PRIOR EF (2.7), EF then updates to 2.8
+      // for the next round. round(16 * 2.7) = 43.
+      expect(result.interval_days).toBe(Math.round(16 * 2.7));
+      expect(result.EF).toBeCloseTo(2.8, 2);
+    });
+  });
+});

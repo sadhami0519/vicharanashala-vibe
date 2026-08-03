@@ -121,3 +121,29 @@ export interface BulkUpdateResponse {
   /** Human-readable summary, e.g. "Updated notifications for 3 students (6 review items)." */
   message: string;
 }
+
+/**
+ * Teacher-facing summary of a course (added 2026-08-03).
+ * Returned by GET /api/spaced-repetition/courses (and the mock-mode
+ * getCourses() helper). The teacher's SR dashboard lists these so they
+ * can pick a course by name + see how many students have an active
+ * schedule for it, instead of typing IDs by hand.
+ */
+export interface TeacherCourseSummary {
+  id: string;
+  name: string;
+  studentCount: number;
+}
+
+/**
+ * Rich student row returned by getCourseStudentsRich (added 2026-08-03).
+ * Backward-compat note: the legacy getCourseStudents() response still
+ * returns { studentIds: string[] } for any code that hasn't migrated
+ * to the rich variant. New UI components MUST consume this rich shape
+ * and never show raw IDs to teachers.
+ */
+export interface EnrichedStudent {
+  id: string;
+  name: string;
+  email: string;
+}

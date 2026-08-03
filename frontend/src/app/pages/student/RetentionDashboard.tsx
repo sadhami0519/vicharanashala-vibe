@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import {
   Card,
@@ -15,7 +15,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import {
-  Brain,
   Sparkles,
   TrendingUp,
   Calendar,
@@ -37,6 +36,10 @@ import {
 } from '@/hooks/spaced-repetition-hooks';
 import { ReviewItem } from '@/types/spaced-repetition.types';
 import { DEMO_STUDENT_ID, isDemoStudentEmail } from '@/lib/spaced-repetition-api';
+// Streak badge (added 2026-08-03): reads the daily-review streak from
+// localStorage on mount so the badge reflects reviews done in prior
+// sessions (including ReviewSession, where the streak is incremented).
+import { loadStreak } from '@/lib/streak';
 import { InfoPopover } from '@/components/InfoPopover';
 import {
   SPACED_REPETITION_INFO_TITLE,
@@ -99,6 +102,79 @@ const COURSE_LABELS: Record<string, string> = {
 
 function courseLabel(courseId: string): string {
   return COURSE_LABELS[courseId] ?? courseId;
+}
+
+// ── Retention ring (added 2026-08-03) ───────────────────────────────────────────────
+// Small SVG progress ring that color-codes by retentionBand. Replaces the flat
+// "Retention: NN%" text in CourseRetentionCard so the percentage becomes the
+// visual focal point of each course card. Purely visual — the percentage number
+// is still shown inside the ring center for users who want to read it.
+function RetentionRing({
+  percent,
+  band,
+}: {
+  percent: number;
+  band: { label: string; chipClass: string };
+}) {
+  const clamped = Math.max(0, Math.min(100, percent));
+  // r=22, circumference = 2 * π * r ≈ 138.23
+  const radius = 22;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference * (1 - clamped / 100);
+  const strokeClass = band.chipClass.includes('emerald')
+    ? 'stroke-emerald-500'
+    : band.chipClass.includes('amber')
+      ? 'stroke-amber-500'
+      : band.chipClass.includes('rose')
+        ? 'stroke-rose-500'
+        : 'stroke-slate-500';
+
+  // Ring + centered % label share a 56x56 relative box; the label is
+  // absolutely positioned over the ring's center so the "Retention" text
+  // rendered by the parent grid cell stays cleanly below with no overlap.
+  // (2026-08-03: previous negative-margin stacking put the % glyph over the
+  // "Retention" label — see commit note.)
+  return (
+    <div
+      className="relative w-14 h-14"
+      aria-label={`${clamped}% retention (${band.label})`}
+    >
+      <svg
+        width="56"
+        height="56"
+        viewBox="0 0 56 56"
+        className="-rotate-90 block"
+        role="img"
+        aria-hidden="false"
+      >
+        {/* Track */}
+        <circle
+          cx="28"
+          cy="28"
+          r={radius}
+          fill="none"
+          strokeWidth="6"
+          className="stroke-slate-200"
+        />
+        {/* Progress arc */}
+        <circle
+          cx="28"
+          cy="28"
+          r={radius}
+          fill="none"
+          strokeWidth="6"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          className={`transition-all ${strokeClass}`}
+        />
+      </svg>
+      {/* Centered percentage label, layered absolutely over the ring center */}
+      <div className="absolute inset-0 flex items-center justify-center text-[13px] font-semibold leading-none text-slate-700 pointer-events-none">
+        {clamped}%
+      </div>
+    </div>
+  );
 }
 
 // ── Per-course retention card ─────────────────────────────────────────────
@@ -186,7 +262,7 @@ function CourseRetentionCard({
       <CardContent className="space-y-4">
         {/* Counts row */}
         <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="rounded-md border bg-rose-50/50 border-rose-200/60 p-2">
+          <div className="rounded-md border bg-rose-50/50 border-rose-200/60 p-2 flex flex-col items-center justify-center">
             <div className="text-lg font-semibold text-rose-700">
               {data.overdueCount}
             </div>
@@ -194,7 +270,7 @@ function CourseRetentionCard({
               Due now
             </div>
           </div>
-          <div className="rounded-md border bg-amber-50/50 border-amber-200/60 p-2">
+          <div className="rounded-md border bg-amber-50/50 border-amber-200/60 p-2 flex flex-col items-center justify-center">
             <div className="text-lg font-semibold text-amber-700">
               {data.dueSoonCount}
             </div>
@@ -202,11 +278,9 @@ function CourseRetentionCard({
               Due ≤ 7d
             </div>
           </div>
-          <div className="rounded-md border bg-emerald-50/50 border-emerald-200/60 p-2">
-            <div className="text-lg font-semibold text-emerald-700">
-              {retentionPercent}%
-            </div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          <div className="rounded-md border bg-slate-50/50 border-slate-200/60 p-2 flex flex-col items-center justify-center">
+            <RetentionRing percent={retentionPercent} band={band} />
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mt-1">
               Retention
             </div>
           </div>
@@ -337,6 +411,12 @@ export default function RetentionDashboard() {
   const studentId =
     isDemoStudentEmail(user?.email) ? DEMO_STUDENT_ID : (user?.uid ?? '');
 
+  // Streak (added 2026-08-03): read once on mount. The increment happens in
+  // ReviewSession's useSubmitReview.onSuccess; this dashboard just shows the
+  // persisted value so a returning student sees their badge without leaving
+  // the dashboard route. (No realtime sync — refreshing the page picks it up.)
+  const [streak] = useState(() => loadStreak());
+
   const { data: schedule, isLoading: isScheduleLoading } =
     useGetSchedule(studentId);
 
@@ -384,15 +464,59 @@ export default function RetentionDashboard() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <Brain className="h-6 w-6" /> Retention dashboard
+            {/* InfoPopover (moved 2026-08-03 to sit before the title,
+                replacing the Brain icon). Reason: the Brain icon was
+                decorative and the InfoPopover (i) was visually jarring
+                after the streak badge — placing it before the title
+                makes it the primary identity affordance and doubles as
+                the help launcher. */}
             <InfoPopover title={SPACED_REPETITION_INFO_TITLE}>
               <SpacedRepetitionInfoBody />
             </InfoPopover>
-            <GoldenButton />
+            Retention dashboard
+            {/* Streak badge (added 2026-08-03; made always-visible 2026-08-03
+                after Emie reported "nothing's visible" — the previous
+                count>0 guard hid the badge until the first review of the
+                day, which made the feature feel invisible. Now shows either
+                a "Start your streak today!" CTA when count=0 or the active
+                count when >0. 🔥 emoji at text-base (16px) on bg-orange-100
+                — high contrast vs the prior bg-orange-50 that nearly hid
+                the small Lucide Flame outline. */}
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-sm font-semibold ${
+                streak.count > 0
+                  ? 'bg-orange-100 border-orange-300 text-orange-900'
+                  : 'bg-slate-50 border-slate-200 text-slate-600'
+              }`}
+              title={
+                streak.count > 0
+                  ? `Last review: ${streak.lastDate ?? 'unknown'} (Asia/Kolkata)`
+                  : 'Complete a review today to start your streak'
+              }
+              aria-label={
+                streak.count > 0
+                  ? `${streak.count} day review streak`
+                  : 'No active streak yet'
+              }
+            >
+              <span aria-hidden="true">{streak.count > 0 ? '🔥' : '✨'}</span>
+              {streak.count > 0
+                ? `${streak.count} day${streak.count === 1 ? '' : 's'}`
+                : 'Start your streak today!'}
+            </span>
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Select a specific subject below to clear its queue, or review all items chronologically.
           </p>
+          {/* GoldenButton (moved here 2026-08-03 from inside the h1).
+              Previously sat inside the h1 alongside the streak badge
+              and InfoPopover; its hover-expand (~280px max-w) pushed the
+              "Review All" button off-screen via flex-wrap. Now lives on
+              its own row so its expansion can never displace anything.
+              The crown icon retains its hover-expand CTA affordance. */}
+          <div className="mt-2">
+            <GoldenButton />
+          </div>
         </div>
         <Button asChild variant="outline">
           <Link to="/student/review">

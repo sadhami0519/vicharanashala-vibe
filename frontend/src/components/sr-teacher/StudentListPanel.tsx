@@ -1,0 +1,210 @@
+import { useState, useMemo } from 'react';
+import { Mail, Search, User, Users, X } from 'lucide-react';
+import { Card } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Skeleton } from '@/components/ui/skeleton';
+import type { EnrichedStudent } from '@/types/spaced-repetition.types';
+import { cn } from '@/utils/utils';
+
+export interface StudentListPanelProps {
+  /** List of enrolled students. When undefined, the loading skeleton is shown. */
+  students?: EnrichedStudent[];
+  /** Currently-selected student ids. Always treated as a string[] of Firebase UIDs. */
+  selectedStudentIds: string[];
+  /** Called when a row's checkbox is toggled. */
+  onToggle: (studentId: string) => void;
+  /** Called when "Select all" / "Clear" header button is clicked. */
+  onToggleAll: () => void;
+  /**
+   * Hide the header "Select all"/"Clear" toggle (added 2026-08-03).
+   * Use for pages where selection is single-student and "select all"
+   * has no meaningful semantics (e.g. a single-student dashboard).
+   * Defaults to false (toggle is shown).
+   */
+  hideSelectAll?: boolean;
+  /** Optional className applied to the outer Card. */
+  className?: string;
+  /** Optional fixed height for the scroll area. Defaults to 260px (matches CourseSelectCard). */
+  scrollHeightClass?: string;
+}
+
+/**
+ * Teacher-facing student picker for the SR dashboards (added 2026-08-03).
+ * Lists enrolled students by NAME + EMAIL, each with a checkbox. Includes
+ * a header select-all toggle. Replaces the previous "Student ABCDE" stub
+ * that showed only the first 5 chars of the Firebase UID.
+ *
+ * Selection state is fully controlled by the parent. The parent stores
+ * student IDs (Firebase UIDs, because the bulk SR mutations still expect
+ * string[] of UIDs); this component only renders names + emails and emits
+ * the toggled id via onToggle().
+ *
+ * **Search bar (added 2026-08-04):** case-insensitive substring match on
+ * EITHER student name OR email (per Emie's request — both searchable so
+ * a teacher with an email-only roster can still find people). Search is
+ * local-only; the parent never sees the query. Selection state is
+ * preserved across search changes so a teacher can filter, click a row,
+ * filter again, click another — without losing prior selections.
+ *
+ * Empty states: four distinct cases
+ *   - `students === undefined` → loading skeleton
+ *   - `students.length === 0`  → "No students have a review schedule for this course yet."
+ *   - filtered list is empty   → "No students match \"<query>\"."
+ *   - otherwise                → render the filtered list
+ */
+export function StudentListPanel({
+  students,
+  selectedStudentIds,
+  onToggle,
+  onToggleAll,
+  hideSelectAll = false,
+  className,
+  scrollHeightClass = 'h-[260px]',
+}: StudentListPanelProps) {
+  const isLoading = students === undefined;
+  const [query, setQuery] = useState('');
+
+  // Apply the search filter. Match by name OR email (both searchable).
+  // IDs are intentionally NOT included because teachers don't think in IDs —
+  // adding id-search would clutter results and slow down the user.
+  const filtered = useMemo(() => {
+    if (!students) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.email.toLowerCase().includes(q),
+    );
+  }, [students, query]);
+
+  const list = students ?? [];
+  const visibleCount = filtered.length;
+  // allSelected/noneSelected are computed against the FILTERED list so the
+  // header counter reflects what's on screen, not the full roster. This
+  // matters when the teacher has filtered to a subset and clicks "Select all".
+  const allSelected =
+    !isLoading && visibleCount > 0 && filtered.every((s) => selectedStudentIds.includes(s.id));
+  const noneSelected = selectedStudentIds.length === 0;
+
+  return (
+    <Card className={cn('p-5 gap-4', className)} data-testid="student-list-panel">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          <h2 className="text-sm font-semibold text-foreground">Enrolled students</h2>
+          {!isLoading && (
+            <span className="text-xs text-muted-foreground" aria-live="polite">
+              {selectedStudentIds.length}/{list.length}
+            </span>
+          )}
+        </div>
+        {!isLoading && list.length > 0 && !hideSelectAll && (
+          <button
+            type="button"
+            onClick={onToggleAll}
+            className={cn(
+              'text-xs font-medium underline-offset-2',
+              'hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm',
+              allSelected ? 'text-primary' : 'text-muted-foreground',
+            )}
+            aria-label={allSelected ? 'Clear student selection' : 'Select all students'}
+          >
+            {allSelected ? 'Clear' : 'Select all'}
+          </button>
+        )}
+      </div>
+
+      {!isLoading && list.length > 0 && (
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search students by name or email…"
+            aria-label="Search students by name or email"
+            className="pl-8 pr-8"
+            data-testid="student-search-input"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              aria-label="Clear student search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className={cn('flex flex-col gap-2 pr-3', scrollHeightClass)} aria-hidden="true">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      ) : list.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-6 text-center">
+          No students have a review schedule for this course yet.
+        </p>
+      ) : visibleCount === 0 ? (
+        <p className="text-sm text-muted-foreground py-6 text-center">
+          No students match &ldquo;{query}&rdquo;.
+        </p>
+      ) : (
+        <ScrollArea className={cn(scrollHeightClass, 'pr-3')}>
+          <ul className="flex flex-col gap-1" role="list" aria-label="Enrolled students">
+            {filtered.map((student) => {
+              const checked = selectedStudentIds.includes(student.id);
+              return (
+                <li key={student.id}>
+                  <label
+                    className={cn(
+                      'flex items-start gap-3 rounded-lg px-2 py-2 cursor-pointer',
+                      'motion-safe:transition-colors motion-safe:duration-150',
+                      'hover:bg-muted/40',
+                      'focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2',
+                      checked && 'bg-primary/5',
+                    )}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => onToggle(student.id)}
+                      aria-label={`Select ${student.name}`}
+                      className="mt-0.5"
+                    />
+                    <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                      <span className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                        <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
+                        <span className="truncate">{student.name}</span>
+                      </span>
+                      <span className="text-xs text-muted-foreground flex items-center gap-1.5 min-w-0">
+                        <Mail className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        <span className="truncate">{student.email}</span>
+                      </span>
+                    </div>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </ScrollArea>
+      )}
+
+      {!isLoading && !noneSelected && (
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {selectedStudentIds.length} student{selectedStudentIds.length === 1 ? '' : 's'} selected.
+        </p>
+      )}
+    </Card>
+  );
+}

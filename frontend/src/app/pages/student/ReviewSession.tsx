@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useReducer, useRef } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Card,
@@ -46,6 +46,10 @@ import {
   RecallQuality,
 } from '@/types/spaced-repetition.types';
 import { DEMO_STUDENT_ID, isDemoStudentEmail, skipReview } from '@/lib/spaced-repetition-api';
+// Streak badge (added 2026-08-03): reads/writes the daily-review streak in
+// localStorage. Update fires inside the useSubmitReview onSuccess callback so
+// the badge increments the moment a card is committed.
+import { loadStreak, recordReviewToday } from '@/lib/streak';
 
 // ── Local mock question body — replaces GET /api/quizzes/questions/:id/review
 // while the backend is offline. Mirrors the ReviewQuestionResponse shape:
@@ -387,8 +391,18 @@ function reducer(state: SessionState, action: Action): SessionState {
     case 'question-load-failed':
       return { ...state, phase: 'showing-feedback' };
     case 'submit': {
+      // Knob 8c (2026-08-01): when the backend caps a wrong-answer
+      // `got_it` to `unsure`, the chip color + description must reflect
+      // the EFFECTIVE quality (what was actually recorded for SM-2),
+      // not the button the student pressed. Otherwise a downgrade
+      // renders the green "Confident and fast" copy despite the
+      // student having gotten it wrong. The amber "Downgraded"
+      // notice below still surfaces what was originally clicked.
+      const effectiveQuality: RecallQuality = action.qualityAdjusted
+        ? 'unsure'
+        : action.quality;
       const lastResponse: NonNullable<SessionState['lastResponse']> = {
-        quality: action.quality,
+        quality: effectiveQuality,
         nextReviewAt: action.nextReviewAt,
         // Knob 8b: threaded through so the rate-button `Got it` gate
         // and the keyboard-`1` shortcut can read it without an
@@ -409,7 +423,9 @@ function reducer(state: SessionState, action: Action): SessionState {
         answeredCount: state.answeredCount + 1,
         qualityCounts: {
           ...state.qualityCounts,
-          [action.quality]: state.qualityCounts[action.quality] + 1,
+          // Use effectiveQuality so the session summary counts
+          // downgrades under the right bucket.
+          [effectiveQuality]: state.qualityCounts[effectiveQuality] + 1,
         },
         phase: 'showing-feedback',
         // Knob 8: `answeredOption` stays true so the green/red
@@ -724,6 +740,12 @@ export default function ReviewSession() {
 
   const [state, dispatch] = useReducer(reducer, initialState);
 
+  // Streak state (added 2026-08-03): shown in the progress header. The mock
+  // submitReview also writes to localStorage; this useState mirrors the
+  // value so the badge re-renders the moment a card is committed. (Real
+  // backend integration would subscribe to a GET /streak endpoint here.)
+  const [streak, setStreak] = useState(() => loadStreak());
+
   // Resolve due items (those whose next_review_at is now or earlier).
   const dueItems = useMemo(() => {
     if (!schedule) return [];
@@ -839,6 +861,9 @@ export default function ReviewSession() {
             qualityAdjustedFrom: updated.qualityAdjustedFrom,
             canonicalAnswer: updated.canonicalAnswer,
           });
+          // Streak update (added 2026-08-03): fire after the dispatch so the
+          // badge updates on the same render cycle as the feedback card.
+          setStreak(recordReviewToday());
         },
         onError: err => {
           toast.error(
@@ -1272,11 +1297,43 @@ export default function ReviewSession() {
               <Brain className="h-4 w-4" />
               Card {state.currentIndex + 1} of {state.dueQueue.length}
             </span>
-            <span>
-              {totalDueCount > state.dueQueue.length
-                ? `${totalDueCount - state.dueQueue.length} more tomorrow`
-                : 'Last card in queue'}
-            </span>
+            <div className="flex items-center gap-3">
+              {/* Streak badge (added 2026-08-03; made always-visible 2026-08-03
+                  after Emie reported "nothing's visible" — the previous
+                  count>0 guard hid the badge until the first review of the
+                  day, which made the feature feel invisible. Now shows
+                  either a "Start your streak today!" CTA when count=0 or
+                  the active count when >0. 🔥 emoji at text-sm (14px) on
+                  bg-orange-100 — high contrast vs the prior bg-orange-50
+                  that nearly hid the small Lucide Flame outline. */}
+              <span
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                  streak.count > 0
+                    ? 'bg-orange-100 border-orange-300 text-orange-900'
+                    : 'bg-slate-50 border-slate-200 text-slate-600'
+                }`}
+                title={
+                  streak.count > 0
+                    ? `Last review: ${streak.lastDate ?? 'unknown'} (Asia/Kolkata)`
+                    : 'Complete a review today to start your streak'
+                }
+                aria-label={
+                  streak.count > 0
+                    ? `${streak.count} day review streak`
+                    : 'No active streak yet'
+                }
+              >
+                <span aria-hidden="true">{streak.count > 0 ? '🔥' : '✨'}</span>
+                {streak.count > 0
+                  ? `${streak.count} day${streak.count === 1 ? '' : 's'}`
+                  : 'Start your streak today!'}
+              </span>
+              <span>
+                {totalDueCount > state.dueQueue.length
+                  ? `${totalDueCount - state.dueQueue.length} more tomorrow`
+                  : 'Last card in queue'}
+              </span>
+            </div>
           </div>
           <Progress value={progress} className="h-2" />
         </CardContent>

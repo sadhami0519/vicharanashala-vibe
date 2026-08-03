@@ -2,12 +2,18 @@
  * GoldenButton — inline entry point to the motivation system.
  *
  * Renders inline within the retention dashboard h1 row, immediately
- * after the InfoPopover ("i"). The crown icon visually matches the
- * h1's `text-2xl` baseline (24px) so it reads as a typographic glyph
- * rather than a separate widget.
+ * after the InfoPopover ("i").
+ *
+ * STYLING (revised 2026-08-03 after Emie said the amber-gold palette
+ * clashed with the rest of the dashboard and the chip dwarfed the
+ * streak badge next to it). The chip now uses the app's neutral
+ * surface tokens (`bg-muted/40 border-border text-foreground`) and
+ * is sized to peer with the streak badge (`h-7` / 28px, crown icon
+ * at `text-base` / 16px). The amber gradient was dropped; the CTA
+ * label retains the same hover-expand behaviour in app colors.
  *
  * Hover behaviour: on hover (and only when the user has not asked for
- * reduced motion), the chip expands horizontally into a gold pill that
+ * reduced motion), the chip expands horizontally into a pill that
  * reveals the call-to-action copy. The CTA text is hidden at narrow
  * widths (mobile / small viewports) since touch devices have no hover,
  * and the expanded pill would otherwise crowd narrow screens.
@@ -67,18 +73,18 @@ export function GoldenButton({
         title={CTA_LABEL}
         className={cn(
           'group inline-flex items-center self-center',
-          // Size - h-9 (36px) sits cleanly on a text-2xl baseline.
-          'h-9 rounded-full',
-          // Golden aesthetic — uses Tailwind's default amber scale
-          // (`amber-600` → `amber-800`) rather than the app's primary
-          // tokens. Reason: the primary tokens (`hsl(38 95% 58%)`)
-          // are too bright for white text - they'd fail WCAG contrast
-          // at ~2:1. The amber-600 to amber-800 gradient gives
-          //   amber-600 (#D97706) -> white ~4.5:1 (AA pass)
-          //   amber-800 (#92400E) -> white ~8.1:1 (AAA pass)
-          // Both tones are deeply golden, but neither is neon.
-          'border border-amber-900/30',
-          'bg-gradient-to-br from-amber-600 to-amber-800',
+          // Size - h-7 (28px) peers with the streak badge next to it.
+          // Previously h-9 (36px) + text-2xl crown; Emie flagged that
+          // it dwarfed the rest of the dashboard header (2026-08-03).
+          'h-7 rounded-full',
+          // Neutral app colors (revised 2026-08-03): previously used
+          // amber-600 + amber-800 gradient which clashed with the
+          // muted dashboard palette. Now uses the same surface tokens
+          // the rest of the page uses (bg-muted/40, border-border,
+          // text-foreground) so the button reads as part of the UI,
+          // not a separate widget.
+          'border border-border bg-muted/40 text-foreground',
+          'hover:bg-muted/60',
           // Typography + spacing.
           'gap-0 px-0',
           // Click feedback.
@@ -87,23 +93,24 @@ export function GoldenButton({
           'cursor-pointer',
           // Transition for the expand.
           'motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out',
-          // Focus ring for keyboard users. Ring color matches the
-          // chip body's darker tone so it has presence on either
-          // light or dark page backgrounds.
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-700 focus-visible:ring-offset-2',
+          // Focus ring for keyboard users. Uses the app's primary
+          // ring token so the focus indicator matches the rest of
+          // the UI.
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
           className,
         )}
       >
         {/*
           The crown icon is the visible glyph at rest. Sized at
-          text-2xl (24px) to match the h1's baseline exactly so it
-          reads as a typographic peer to "Retention dashboard", not
-          a separate widget. `flex-shrink-0` keeps it from being
-          crushed when the pill expands.
+          text-base (16px) to peer with the streak badge (text-sm
+          14px) and the InfoPopover "i" next to it. Previously
+          text-2xl (24px) which read as a separate widget.
+          `flex-shrink-0` keeps it from being crushed when the pill
+          expands.
         */}
         <span
           aria-hidden="true"
-          className="flex items-center justify-center w-9 h-9 flex-shrink-0 text-2xl leading-none"
+          className="flex items-center justify-center w-7 h-7 flex-shrink-0 text-base leading-none"
         >
           👑
         </span>
@@ -112,26 +119,18 @@ export function GoldenButton({
           CTA label: revealed on hover via the same `max-w-0` ->
           `max-w-[360px]` trick as before. `whitespace-nowrap` keeps
           the text on one line. Hidden below `sm:` since touch has
-          no hover.
+          no hover. Text color now uses app tokens (text-foreground)
+          since the chip background is muted.
         */}
         <span
           aria-hidden="true"
           className={cn(
             'hidden sm:inline-block',
-            // White text on the amber-600 → amber-800 gradient. The
-            // darker top end of the gradient passes AA independently;
-            // the lighter bottom is borderline but still readable at
-            // font-semibold. If we ever want to be stricter, swap to
-            // `from-amber-700 to-amber-900` (both pass AAA).
-            'text-sm font-semibold tracking-tight text-white',
+            'text-sm font-semibold tracking-tight text-foreground',
             'overflow-hidden whitespace-nowrap',
             // Collapsed: 0 width, 0 padding, 0 opacity.
             'max-w-0 opacity-0',
             // Hover-expand (motion-safe only): reveal label.
-            // Width tuned for CTA_LABEL at text-sm / font-semibold
-            // (~280-320px natural width depending on font metrics).
-            // 360px gives a small buffer; anything narrower clips the
-            // trailing characters inside `overflow-hidden`.
             'motion-safe:group-hover:max-w-[360px] motion-safe:group-hover:opacity-100',
             'motion-safe:group-hover:pl-2 motion-safe:group-hover:pr-4',
             // Reduced-motion users stay on the round button only.
