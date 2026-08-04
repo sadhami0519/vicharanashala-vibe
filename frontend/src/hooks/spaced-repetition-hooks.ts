@@ -19,6 +19,9 @@ import {
   bulkSetStudentSRDisabled,
   getAssignableQuestions,
   assignReview,
+  getQuestionSummary,
+  setExamPrepMode,
+  setPaused,
 } from '@/lib/spaced-repetition-api';
 
 // ── Query keys ─────────────────────────────────────────────────────────────
@@ -34,6 +37,11 @@ export const spacedRepetitionKeys = {
     ['spaced-repetition', 'sr-status', studentId] as const,
   assignableQuestions: (courseId: string) =>
     ['spaced-repetition', 'assignable-questions', courseId] as const,
+  // Day 2 (2026-08-04): per-card question summary. Keyed by questionId
+  // so each card row hits its own cache entry. Multiple cards asking
+  // for the same question (cross-student) share the same cache row.
+  questionSummary: (questionId: string) =>
+    ['spaced-repetition', 'question-summary', questionId] as const,
 };
 
 // ── Queries ────────────────────────────────────────────────────────────────
@@ -212,6 +220,83 @@ export function useGetCourses() {
   return useQuery({
     queryKey: ['spaced-repetition', 'courses'] as const,
     queryFn: () => getCourses(),
+  });
+}
+
+/**
+ * Day 2 (2026-08-04): fetches a single question's summary (body, type,
+ * bankTitles) for the teacher dashboard per-card row. Used by `useQueries`
+ * inside `TeacherSRDashboard.tsx` to fan out one query per card.
+ */
+export function useGetQuestionSummary(questionId: string) {
+  return useQuery({
+    queryKey: spacedRepetitionKeys.questionSummary(questionId),
+    queryFn: () => getQuestionSummary(questionId),
+    enabled: !!questionId,
+  });
+}
+
+/**
+ * Per-student wrapper for the bulk exam-prep toggle (added 2026-08-04).
+ * Used by the teacher dashboard's "Enable/Disable Exam-Prep Mode" button.
+ *
+ * Takes (studentId, courseId) at hook construction time so the call site
+ * can stay terse: `examPrep.mutateAsync(enabled)`. Invalidates the
+ * student's schedule so the UI refreshes the per-card `exam_prep_mode`
+ * badge after the toggle.
+ */
+export function useSetExamPrepMode(studentId: string, courseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      setExamPrepMode(studentId, courseId, enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: spacedRepetitionKeys.schedule(studentId),
+      });
+    },
+  });
+}
+
+/**
+ * Per-student wrapper for the bulk pause toggle (added 2026-08-04).
+ * Used by the teacher dashboard's "Pause/Resume All Reviews" button.
+ *
+ * Backs the new `PATCH /api/spaced-repetition/bulk/pause` endpoint via
+ * the FE `setPaused()` wrapper. Invalidates the schedule so the
+ * per-card `is_paused` badge updates immediately.
+ */
+export function useSetPaused(studentId: string, courseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (paused: boolean) =>
+      setPaused(studentId, courseId, paused),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: spacedRepetitionKeys.schedule(studentId),
+      });
+    },
+  });
+}
+
+/**
+ * Per-student wrapper for the per-card reset action (added 2026-08-04).
+ * Used by the teacher dashboard's per-card "Reset" button. Bakes the
+ * studentId into the hook so the call site is `reset.mutateAsync(questionId)`.
+ *
+ * Distinct from the legacy `useResetReview()` (which takes an arg
+ * object) — this one matches the dashboard's call-site shape.
+ * Invalidates the schedule after success.
+ */
+export function useResetQuestion(studentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (questionId: string) => resetReview(studentId, questionId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: spacedRepetitionKeys.schedule(studentId),
+      });
+    },
   });
 }
 

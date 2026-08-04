@@ -117,6 +117,21 @@ export interface IReviewItem {
   exam_prep_mode?: boolean;
 
   /**
+   * Knob 5 (Phase B, 2026-07-17): per-student pause toggle on a review
+   * item. When `true`, the item is excluded from `findDueItems()` so it
+   * never surfaces in the review queue. The student must resume it
+   * (either per-card or bulk) for it to become due again. Distinct from
+   * `notification_opt_out` (which only suppresses notifications) and
+   * `exam_prep_mode` (which re-sorts but doesn't suppress).
+   *
+   * Bulk toggled via `PATCH /bulk/pause` (added 2026-08-04 — Day 2
+   * teacher control hooks). The interface field was always present in
+   * the documents but only added to the TS interface today for type
+   * safety on the new repo method (`updatePauseBulk`).
+   */
+  is_paused?: boolean;
+
+  /**
    * Knob 7 (Phase C, 2026-07-21): origin of this ReviewItem.
    * - 'auto-seed' (default for backward-compat with existing seeded items):
    *   Created by `seedSchedule()` when the student completed a course.

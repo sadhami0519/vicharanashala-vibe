@@ -15,6 +15,14 @@ export interface ReviewItem {
   last_reviewed_at: string | null;
   notification_opt_out: boolean;
   exam_prep_mode?: boolean;
+  /**
+   * Knob 5 (Phase B, 2026-07-17): per-student pause toggle on a review
+   * item. When `true`, the item is excluded from the review queue. The
+   * dashboard's "Pause All Reviews" button (added 2026-08-04) bulk-flips
+   * this flag on all items for the selected student in the selected
+   * course. Mirrors the backend `IReviewItem.is_paused` field.
+   */
+  is_paused?: boolean;
   remediation_hint?: string | null;
   /**
    * Knob 7 (Phase C, 2026-07-21): origin of this ReviewItem.
@@ -146,4 +154,44 @@ export interface EnrichedStudent {
   id: string;
   name: string;
   email: string;
+}
+
+/**
+ * Question summary for the teacher dashboard per-card row (added 2026-08-04).
+ * Returns the question body (mapped from `IQuestion.text` on the backend),
+ * the question type (so the teacher UI can render a question-type badge
+ * without a separate fetch), and the list of bank titles that reference
+ * this question.
+ *
+ * Backs `GET /api/spaced-repetition/questions/:questionId/summary` (Day 2).
+ * On the frontend this is the alternative to rendering the raw question_id
+ * slice in the cohort table — teachers see the question text directly.
+ *
+ * Field doc cross-references:
+ * - `body` is the same field name used by `ReviewQuestionResponse.body` in
+ *   the student-side review card fetch (`getForReview`). Two endpoints,
+ *   same field name, so the FE can share a Body component if it ever
+ *   needs to.
+ * - `bankTitles` is an array of strings (no ids) — the teacher UI only
+ *   needs the names for debugging "why is this question on this course?".
+ *   Source: `IQuestionBank.title`.
+ * - `type` is the same enum as the backend `IQuestion.type`:
+ *   'SELECT_ONE_IN_LOT' | 'SELECT_MANY_IN_LOT' | 'NUMERIC_ANSWER' |
+ *   'DESCRIPTIVE' | 'ORDER_THE_LOTS'.
+ */
+export interface QuestionSummary {
+  id: string;
+  body: string;
+  type: string;
+  bankTitles: string[];
+}
+
+/**
+ * Response wrapper for `GET /api/spaced-repetition/questions/:questionId/summary`.
+ * Day 2 (2026-08-04) wrapped pattern — matches the shape of the other
+ * spaced-repetition endpoints so the FE stays consistent (e.g. `res.question`
+ * vs `res.students` / `res.courses`).
+ */
+export interface QuestionSummaryResponse {
+  question: QuestionSummary;
 }

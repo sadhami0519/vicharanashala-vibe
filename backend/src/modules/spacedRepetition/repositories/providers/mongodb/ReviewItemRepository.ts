@@ -259,6 +259,45 @@ class ReviewItemRepository {
   }
 
   /**
+   * Bulk flip the `is_paused` flag for an array of students within a
+   * given course (added 2026-08-04 — Day 2 teacher control hooks).
+   *
+   * Mirrors `updateExamPrepBulk` exactly so the two endpoints share the
+   * same dual-count return shape (Bug 3, 2026-08-01). Paused items are
+   * excluded from `findDueItems`, so this is the teacher-level kill
+   * switch for a student's review queue.
+   *
+   * NOTE: when `paused === false`, this also flips items that were
+   * previously paused by `updatePauseSingle` (per-card pause via the
+   * per-card row in the teacher dashboard). Same flag, same predicate.
+   */
+  async updatePauseBulk(
+    studentIds: string[],
+    courseId: string,
+    paused: boolean,
+    session?: ClientSession,
+  ): Promise<{ modifiedCount: number; distinctStudentsModified: number }> {
+    await this.init();
+    const distinctIds = await this.reviewItemCollection.distinct(
+      'student_id',
+      { student_id: { $in: studentIds }, course_id: courseId },
+      { session },
+    );
+    const result = await this.reviewItemCollection.updateMany(
+      {
+        student_id: { $in: studentIds },
+        course_id: courseId,
+      },
+      { $set: { is_paused: paused } },
+      { session },
+    );
+    return {
+      modifiedCount: result.modifiedCount,
+      distinctStudentsModified: distinctIds.length,
+    };
+  }
+
+  /**
    * Gets a list of unique student IDs who have active review items for a specific course.
    */
   async getDistinctStudentsForCourse(
@@ -272,6 +311,53 @@ class ReviewItemRepository {
       { session }
     );
     return studentIds as string[];
+  }
+
+  /**
+   * Day 2 (2026-08-04): backs `GET /api/spaced-repetition/courses`.
+   * Returns the distinct course IDs that have at least one ReviewItem,
+   * each paired with the count of distinct students who have a schedule
+   * for that course. Used by the teacher dashboard course picker.
+   *
+   * Implementation: one `$group` aggregation that does both `distinct`
+   * counts in a single round-trip — cheaper than 2N distinct queries
+   * (one per course to count its students). The `_id` field is the
+   * course id, with `studentCount` as the only projection.
+   *
+   * Courses with no ReviewItems are NOT included (this is intentional —
+   * the teacher surface only cares about courses with active schedules).
+   * If a course exists in `ICourse` but has no schedules, the UI
+   * shows an empty-state message instead.
+   *
+   * Fail-open: returns [] on empty / error; the service layer logs
+   * and returns the same empty shape so the controller can render
+   * the empty-state without distinguishing "no data" from "error".
+   */
+  async getDistinctCoursesWithStudentCount(
+    session?: ClientSession,
+  ): Promise<Array<{ courseId: string; studentCount: number }>> {
+    await this.init();
+    const cursor = this.reviewItemCollection.aggregate(
+      [
+        {
+          $group: {
+            _id: '$course_id',
+            studentIds: { $addToSet: '$student_id' },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            courseId: '$_id',
+            studentCount: { $size: '$studentIds' },
+          },
+        },
+        { $sort: { courseId: 1 } },
+      ],
+      { session },
+    );
+    const results = await cursor.toArray();
+    return results as Array<{ courseId: string; studentCount: number }>;
   }
 
 }

@@ -38,6 +38,8 @@ import {
   BulkUpdateOptOutResponse,
   BulkExamPrepBody,
   BulkExamPrepResponse,
+  BulkPauseBody,
+  BulkPauseResponse,
   SetStudentSRDisabledBody,
   SetStudentSRDisabledResponse,
   StudentSRStatusResponse,
@@ -47,6 +49,10 @@ import {
   AssignReviewResponse,
   GetAssignableQuestionsResponse,
   CourseIdParam,
+  CoursesListResponse,
+  CourseStudentsRichResponse,
+  QuestionSummaryResponse,
+  QuestionIdParam,
 } from '../classes/validators/SpacedRepetitionValidator.js';
 
 @OpenAPI({ tags: ['Spaced Repetition'] })
@@ -202,6 +208,38 @@ class SpacedRepetitionController {
       courseId,
       enabled
     ) as unknown as Promise<BulkExamPrepResponse>;
+  }
+
+  @OpenAPI({
+    summary: 'Bulk toggle pause (teacher control)',
+    description: `Toggles the \`is_paused\` flag for an array of students in a given
+    course. When \`paused === true\`, the affected items are excluded
+    from the student's review queue (see Knob 5 / \`findDueItems\`).
+    When \`paused === false\`, items that were previously paused
+    (whether bulk-paused here or per-card-paused) become due again.
+    Teacher or admin role required.`,
+  })
+  @Authorized()
+  @Patch('/bulk/pause')
+  @HttpCode(200)
+  @ResponseSchema(BulkPauseResponse, {
+    description: 'Bulk pause toggle result. Returns `studentsAffected` (distinct student count), `itemsAffected` (review-item count), `updatedCount` (alias of itemsAffected, deprecated), and a human-readable `message`.',
+    statusCode: 200,
+  })
+  async bulkUpdatePause(
+    @CurrentUser() user: IUser,
+    @Body() body: BulkPauseBody,
+  ): Promise<BulkPauseResponse> {
+    this._assertAdmin(user);
+    const { studentIds, courseId, paused } = body;
+    // Same cast rationale as bulkUpdateExamPrepMode: the non-async
+    // service method returns `Promise<Promise<...>>` because
+    // `_withTransaction` returns the inner session's promise.
+    return this.spacedRepetitionService.bulkUpdatePause(
+      studentIds,
+      courseId,
+      paused
+    ) as unknown as Promise<BulkPauseResponse>;
   }
 
   @OpenAPI({
@@ -487,6 +525,96 @@ class SpacedRepetitionController {
       sr_disabled,
     );
     return result;
+  }
+
+  // ── Day 2 (2026-08-04): teacher human-readable name lookups ──────────
+  //
+  // These three endpoints replace the day-1 mock-only name lookups
+  // (MOCK_COURSE_DIRECTORY / MOCK_STUDENT_DIRECTORY) with live data.
+  // All three are admin-gated (see `_assertAdmin`). The legacy
+  // endpoint at `/courses/:courseId/students` keeps returning the
+  // raw-uid shape for backward-compat with any in-flight caller.
+
+  /**
+   * GET /api/spaced-repetition/courses
+   *
+   * Returns every course with at least one ReviewItem, paired with
+   * the count of distinct students who have a schedule for it. Used
+   * by the teacher dashboard course picker. Sorted by course id.
+   *
+   * Teacher or admin role required.
+   */
+  @Authorized()
+  @Get('/courses')
+  @HttpCode(200)
+  @ResponseSchema(CoursesListResponse, {
+    description: 'List of courses with review schedules + student counts.',
+    statusCode: 200,
+  })
+  async getCourses(
+    @CurrentUser() user: IUser,
+  ): Promise<CoursesListResponse> {
+    this._assertAdmin(user);
+    return this.spacedRepetitionService.getCoursesInCohort();
+  }
+
+  /**
+   * GET /api/spaced-repetition/courses/:courseId/students-rich
+   *
+   * Returns the rich student rows (id + display name + email) for
+   * every student who has a schedule in the given course. Replaces
+   * the legacy `/courses/:courseId/students` endpoint for the
+   * teacher-facing surface; the legacy endpoint is kept for
+   * backward-compat.
+   *
+   * Sorted by display name (case-insensitive), with id as a stable
+   * tie-breaker.
+   *
+   * Teacher or admin role required.
+   */
+  @Authorized()
+  @Get('/courses/:courseId/students-rich')
+  @HttpCode(200)
+  @ResponseSchema(CourseStudentsRichResponse, {
+    description: 'Rich student rows (id, name, email) for a course cohort.',
+    statusCode: 200,
+  })
+  async getCourseStudentsRich(
+    @CurrentUser() user: IUser,
+    @Params() params: CourseIdParam,
+  ): Promise<CourseStudentsRichResponse> {
+    this._assertAdmin(user);
+    return this.spacedRepetitionService.getStudentsWithSchedulesRich(
+      params.courseId,
+    );
+  }
+
+  /**
+   * GET /api/spaced-repetition/questions/:questionId/summary
+   *
+   * Returns the question body (mapped from `IQuestion.text`),
+   * question type, and the list of bank titles that reference this
+   * question. Used by the teacher dashboard per-card row to preview
+   * the question text without a full review-card fetch.
+   *
+   * Returns 404 if the question doesn't exist. Bank-title lookup is
+   * fail-open.
+   *
+   * Teacher or admin role required.
+   */
+  @Authorized()
+  @Get('/questions/:questionId/summary')
+  @HttpCode(200)
+  @ResponseSchema(QuestionSummaryResponse, {
+    description: 'Question summary for teacher dashboard preview.',
+    statusCode: 200,
+  })
+  async getQuestionSummary(
+    @CurrentUser() user: IUser,
+    @Params() params: QuestionIdParam,
+  ): Promise<QuestionSummaryResponse> {
+    this._assertAdmin(user);
+    return this.spacedRepetitionService.getQuestionSummary(params.questionId);
   }
 
   // ── Manual Review Assignment (Knob 7, Phase C, 2026-07-21) ─────────────

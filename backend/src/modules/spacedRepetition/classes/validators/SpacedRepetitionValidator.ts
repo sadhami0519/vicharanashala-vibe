@@ -94,6 +94,101 @@ export class BulkSetStudentSRDisabledResponse {
   message: string;
 }
 
+// ── Teacher human-readable name lookups (Day 2, 2026-08-04) ──────────────
+//
+// Teacher-facing surface replacements for the raw-id endpoints
+// (Day 1 frontend used mock directories; these endpoints back the live
+// path). Every endpoint is admin-only (gated by the controller's
+// `_assertAdmin`). All lookups are fail-open: a missing course / user
+// doc returns null name/email rather than throwing, so the teacher
+// UI still renders with graceful-degradation copy.
+
+/**
+ * One entry in `GET /api/spaced-repetition/courses` response.
+ * Mirrors the frontend `TeacherCourseSummary` interface in
+ * `frontend/src/types/spaced-repetition.types.ts` (single source of
+ * truth — types match field-for-field).
+ *
+ * `studentCount` is the number of distinct students with at least
+ * one ReviewItem for this course (computed via `distinct` on the
+ * `review_items` collection). Returns 0 for courses with no seeded
+ * schedules — the teacher UI renders the row but shows "0 students".
+ */
+export class TeacherCourseSummary {
+  id: string;
+  name: string;
+  studentCount: number;
+}
+
+/**
+ * Response for `GET /api/spaced-repetition/courses`.
+ * Includes the raw count alongside the array so the frontend can
+ * decide whether to render the picker empty-state without an extra
+ * `length` lookup.
+ */
+export class CoursesListResponse {
+  count: number;
+  courses: TeacherCourseSummary[];
+}
+
+/**
+ * One entry in `GET /api/spaced-repetition/courses/:courseId/students-rich`
+ * response. Mirrors the frontend `EnrichedStudent` interface.
+ *
+ * `name` is the joined display string (firstName + ' ' + lastName?),
+ * used as the primary label in the teacher UI. `email` is included
+ * so the teacher can disambiguate students with identical names.
+ */
+export class EnrichedStudent {
+  id: string;
+  name: string;
+  email: string;
+}
+
+/**
+ * Response for `GET /api/spaced-repetition/courses/:courseId/students-rich`.
+ * Replaces the legacy `{courseId, studentIds, totalStudents}` shape
+ * with rich rows. The legacy endpoint at `/courses/:courseId/students`
+ * keeps returning the old shape for backward-compat with any
+ * in-flight caller.
+ */
+export class CourseStudentsRichResponse {
+  courseId: string;
+  students: EnrichedStudent[];
+  totalStudents: number;
+}
+
+/**
+ * Response for `GET /api/spaced-repetition/questions/:questionId/summary`.
+ * Day 2 / August 2026: the teacher dashboard's per-card row needs the
+ * question text to be human-readable (option 1 from the Day 1 plan).
+ *
+ * `body` is mapped from `IQuestion.text` so the frontend can use the
+ * same field name whether the question is shown in the review card
+ * (existing `getForReview` returns `body`) or in the teacher cohort
+ * view (this new endpoint).
+ *
+ * `bankTitles` is the list of bank titles that reference this
+ * question. The teacher UI only needs the existence + count, but
+ * the names help when debugging "why is this question appearing for
+ * this course?" — keeps the live backend aligned with the assignable
+ * endpoint's `bankTitles[]` shape.
+ *
+ * `type` mirrors `IQuestion.type` so the teacher UI can render a
+ * question-type badge (SOL / SML / OTL / NAT / DES) without a
+ * separate fetch.
+ */
+export class QuestionSummary {
+  id: string;
+  body: string;
+  type: string;
+  bankTitles: string[];
+}
+
+export class QuestionSummaryResponse {
+  question: QuestionSummary;
+}
+
 // ── Request bodies ─────────────────────────────────────────────────────────
 
 /**
@@ -303,6 +398,48 @@ export class BulkExamPrepResponse {
 }
 
 /**
+ * Body for PATCH /bulk/pause
+ * Bulk toggle of the `is_paused` flag on all review items for the given
+ * students within a specific course. Paused items are excluded from the
+ * `findDueItems` query, so they never surface in the review queue until
+ * they are resumed (added 2026-08-04 — Day 2 teacher control hooks).
+ *
+ * Mirrors `BulkExamPrepBody` exactly so the two endpoints share the
+ * teacher mental model: "for these students in this course, flip flag X".
+ */
+export class BulkPauseBody {
+  @IsString()
+  @IsNotEmpty()
+  courseId: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  studentIds: string[];
+
+  @IsBoolean()
+  paused: boolean;
+}
+
+/**
+ * Response for PATCH /bulk/pause
+ * See `BulkExamPrepResponse` for the dual-count rationale (Bug 3, 2026-08-01).
+ */
+export class BulkPauseResponse {
+  /** @deprecated Item count, NOT student count. See BulkExamPrepResponse. */
+  updatedCount: number;
+
+  /** Distinct student count whose items were mutated. */
+  studentsAffected: number;
+
+  /** Raw review-item count mutated (Mongo `modifiedCount`). */
+  itemsAffected: number;
+
+  /** Human-readable summary, e.g. "Paused reviews for 3 students.". */
+  message: string;
+}
+
+/**
  * Body for POST /:studentId/boost
  * Sent by a teacher/admin to force a question to be due immediately
  * for a specific student, optionally resetting the easiness factor.
@@ -444,6 +581,17 @@ export class CourseIdParam {
   @IsString()
   @IsNotEmpty()
   courseId: string;
+}
+
+/**
+ * Route param for `GET /api/spaced-repetition/questions/:questionId/summary`.
+ * Added Day 2 (2026-08-04) alongside the new teacher-facing
+ * human-readable question summary endpoint.
+ */
+export class QuestionIdParam {
+  @IsString()
+  @IsNotEmpty()
+  questionId: string;
 }
 
 /**

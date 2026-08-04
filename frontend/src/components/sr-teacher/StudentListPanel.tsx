@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, type ReactNode } from 'react';
 import { Mail, Search, User, Users, X } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -28,6 +28,13 @@ export interface StudentListPanelProps {
   className?: string;
   /** Optional fixed height for the scroll area. Defaults to 260px (matches CourseSelectCard). */
   scrollHeightClass?: string;
+  /**
+   * Optional context chip slot rendered above the search bar (added 2026-08-04).
+   * Used by the teacher dashboard to show "Course: Algebra Foundations" so
+   * the teacher always sees what scope they're picking students in. Rendered
+   * as a flex row, left-aligned. Defaults to nothing (no-op).
+   */
+  headerSlot?: ReactNode;
 }
 
 /**
@@ -62,6 +69,7 @@ export function StudentListPanel({
   hideSelectAll = false,
   className,
   scrollHeightClass = 'h-[260px]',
+  headerSlot,
 }: StudentListPanelProps) {
   const isLoading = students === undefined;
   const [query, setQuery] = useState('');
@@ -116,6 +124,14 @@ export function StudentListPanel({
           </button>
         )}
       </div>
+
+      {/* Optional context chip (added 2026-08-04): e.g. "Course: Algebra Foundations"
+          so the teacher always knows what scope they're picking students in. */}
+      {headerSlot && (
+        <div className="flex items-center gap-2 flex-wrap" data-testid="student-list-header-slot">
+          {headerSlot}
+        </div>
+      )}
 
       {!isLoading && list.length > 0 && (
         <div className="relative">

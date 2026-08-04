@@ -8,6 +8,7 @@
   BulkUpdateResponse,
   TeacherCourseSummary,
   EnrichedStudent,
+  QuestionSummaryResponse,
 } from '@/types/spaced-repetition.types';
 import { recordReviewToday, clearStreak } from './streak';
 
@@ -141,6 +142,73 @@ export function courseDisplay(courseId: string): CourseDisplay {
   return MOCK_COURSE_DIRECTORY[courseId] ?? {
     name: `Course ${courseId.slice(0, 8)}`,
   };
+}
+
+// ── Question body preview lookup (Day 2, 2026-08-04) ──────────────────────
+//
+// Mirrors the day-1 pattern (MOCK_COURSE_DIRECTORY / MOCK_STUDENT_DIRECTORY)
+// but for question bodies. Used by the teacher dashboard per-card row to
+// show human-readable question text instead of the raw `question_id.slice(0, 8)`.
+//
+// Source-of-truth for the body strings lives in `ReviewSession.tsx`'s
+// `MOCK_QUESTIONS` — keep the two in sync when adding new mock questions.
+// The duplication is intentional: these two pages consume different
+// shapes (the student-side review card wants the full question +
+// options + hint, the teacher-side cohort table just wants the body +
+// type + bank titles), so a shared `MOCK_QUESTIONS_STORE` would force
+// both pages to over-fetch.
+
+export interface QuestionDisplay {
+  body: string;
+  type: string;
+  bankTitles: string[];
+}
+
+export const MOCK_QUESTION_DIRECTORY: Readonly<Record<string, QuestionDisplay>> = Object.freeze({
+  'mock-question-1': {
+    body: 'Which of the following are linear data structures?',
+    type: 'SELECT_MANY_IN_LOT',
+    bankTitles: ['Data Structures'],
+  },
+  'mock-question-2': {
+    body: 'What is the worst-case time complexity of binary search on a sorted array?',
+    type: 'SELECT_ONE_IN_LOT',
+    bankTitles: ['Algorithms'],
+  },
+  'mock-question-3': {
+    body: 'How many bits are in a byte?',
+    type: 'NUMERIC_ANSWER',
+    bankTitles: ['CS Fundamentals'],
+  },
+  'mock-question-4': {
+    body: 'Which layer of the OSI model is responsible for routing packets?',
+    type: 'SELECT_ONE_IN_LOT',
+    bankTitles: ['Networking & OS'],
+  },
+  // Cross-bank entries (matches ReviewSession.tsx Bug 2 fix). These are
+  // only present in the schedule if a teacher triggered Knob 7 reassignment
+  // for the demo student. The teacher dashboard sees them only when present.
+  'mock-question-cross-1': {
+    body: 'In a relational DB, a foreign key constraint enforces…',
+    type: 'SELECT_ONE_IN_LOT',
+    bankTitles: ['Sample Cross-Bank Collection'],
+  },
+  'mock-question-cross-2': {
+    body: 'What does ACID stand for?',
+    type: 'SELECT_MANY_IN_LOT',
+    bankTitles: ['Sample Cross-Bank Collection'],
+  },
+});
+
+/**
+ * Looks up a question's display info by id. Returns `null` if the id
+ * isn't in the mock directory — the caller (the teacher dashboard
+ * per-card row) falls back to the raw `Q:${questionId.slice(0, 8)}`
+ * slice in that case. This matches the fail-open posture of
+ * `studentDisplay()` / `courseDisplay()`.
+ */
+export function questionDisplay(questionId: string): QuestionDisplay | null {
+  return MOCK_QUESTION_DIRECTORY[questionId] ?? null;
 }
 
 // Seed array â€” the initial state used when localStorage has no mock payload
@@ -787,6 +855,66 @@ export async function bulkUpdateExamPrepMode(
 }
 
 /**
+ * Per-student wrapper for the exam-prep bulk toggle (added 2026-08-04).
+ * The frontend teacher dashboard has a single "Enable/Disable Exam-Prep Mode"
+ * button per student (no cohort-wide flow), so we wrap the bulk endpoint
+ * with a single-element `studentIds` array. Same backend, cleaner FE API.
+ *
+ * Backs `PATCH /api/spaced-repetition/bulk/exam-prep` with `studentIds: [studentId]`.
+ */
+export async function setExamPrepMode(
+  studentId: string,
+  courseId: string,
+  enabled: boolean,
+): Promise<BulkUpdateResponse> {
+  return bulkUpdateExamPrepMode(courseId, [studentId], enabled);
+}
+
+/**
+ * Per-student wrapper for the pause bulk toggle (added 2026-08-04).
+ * The frontend teacher dashboard has a single "Pause/Resume All Reviews"
+ * button per student, so we wrap the bulk endpoint with a single-element
+ * `studentIds` array.
+ *
+ * Backs `PATCH /api/spaced-repetition/bulk/pause` with `studentIds: [studentId]`.
+ */
+export async function setPaused(
+  studentId: string,
+  courseId: string,
+  paused: boolean,
+): Promise<BulkUpdateResponse> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 400));
+    const studentIdMatch = studentId;
+    const distinctStudentsTouched = new Set<string>();
+    let itemsChanged = 0;
+    MOCK_REVIEW_ITEMS.forEach((item, idx) => {
+      if (item.course_id === courseId && item.student_id === studentIdMatch) {
+        MOCK_REVIEW_ITEMS[idx] = { ...item, is_paused: paused };
+        distinctStudentsTouched.add(item.student_id);
+        itemsChanged++;
+      }
+    });
+    if (itemsChanged > 0) persistMockState();
+    const studentsAffected = distinctStudentsTouched.size;
+    const trailing =
+      itemsChanged !== studentsAffected
+        ? ` (${itemsChanged} review item${itemsChanged === 1 ? '' : 's'})`
+        : '';
+    return {
+      updatedCount: itemsChanged,
+      studentsAffected,
+      itemsAffected: itemsChanged,
+      message: `${paused ? 'Paused' : 'Resumed'} reviews for ${studentsAffected} student${studentsAffected === 1 ? '' : 's'}${trailing}.`,
+    };
+  }
+  return apiFetch(`/api/spaced-repetition/bulk/pause`, {
+    method: 'PATCH',
+    body: JSON.stringify({ courseId, studentIds: [studentId], paused }),
+  }) as unknown as Promise<BulkUpdateResponse>;
+}
+
+/**
  * Get all unique students who have review schedules for a specific course.
  * GET /api/spaced-repetition/courses/:courseId/students
  */
@@ -856,6 +984,46 @@ export async function getCourseStudentsRich(
     `/api/spaced-repetition/courses/${courseId}/students-rich`,
   );
   return { students: res.students ?? [] };
+}
+
+/**
+ * Get a question summary by id (added 2026-08-04).
+ * Backs `GET /api/spaced-repetition/questions/:questionId/summary` (Day 2).
+ * Used by the teacher dashboard per-card row to show the question body
+ * instead of a raw id slice.
+ *
+ * Mock path: synchronously resolves via `MOCK_QUESTION_DIRECTORY`. The
+ * simulated 200ms delay matches the other rich lookups so the loading
+ * skeleton shows briefly during demo.
+ *
+ * Live path: hits the new backend endpoint. The backend returns 404 when
+ * the question id doesn't exist; we re-throw so the caller (`useQueries`
+ * in the dashboard) can mark the individual card as errored rather than
+ * masking the failure.
+ */
+export async function getQuestionSummary(
+  questionId: string,
+): Promise<QuestionSummaryResponse> {
+  if (USE_MOCK) {
+    await new Promise(r => setTimeout(r, 200));
+    const d = questionDisplay(questionId);
+    if (!d) {
+      // Mirror the backend 404 contract so the dashboard's per-card
+      // error state fires in both mock and live modes.
+      throw new Error(`Question ${questionId} not found in mock directory`);
+    }
+    return {
+      question: {
+        id: questionId,
+        body: d.body,
+        type: d.type,
+        bankTitles: d.bankTitles,
+      },
+    };
+  }
+  return apiFetch<QuestionSummaryResponse>(
+    `/api/spaced-repetition/questions/${questionId}/summary`,
+  );
 }
 
 /**

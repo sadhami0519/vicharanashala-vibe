@@ -5,6 +5,8 @@ import { SPACED_REPETITION_TYPES } from '../types.js';
 import { BaseService } from '#root/shared/classes/BaseService.js';
 import { MongoDatabase } from '#shared/database/providers/mongo/MongoDatabase.js';
 import { GLOBAL_TYPES } from '#root/types.js';
+import { ICourseRepository } from '#root/shared/database/interfaces/ICourseRepository.js';
+import { IUserRepository } from '#root/shared/database/interfaces/IUserRepository.js';
 import { ReviewItemRepository, StudentSRStatusRepository } from '#spacedRepetition/repositories/index.js';
 import { QUIZZES_TYPES } from '#quizzes/types.js';
 import { QuestionBankRepository } from '#quizzes/repositories/providers/mongodb/QuestionBankRepository.js';
@@ -16,6 +18,14 @@ import {
   RECALL_QUALITY_MAP,
   DEFAULT_SM2_STATE,
 } from '../interfaces/IReviewItem.js';
+import {
+  TeacherCourseSummary,
+  CoursesListResponse,
+  EnrichedStudent,
+  CourseStudentsRichResponse,
+  QuestionSummary,
+  QuestionSummaryResponse,
+} from '../classes/validators/SpacedRepetitionValidator.js';
 
 // ── Retention health summary returned per course ───────────────────────────
 
@@ -56,6 +66,16 @@ class SpacedRepetitionService extends BaseService {
 
     @inject(QUIZZES_TYPES.QuestionRepo)
     private readonly questionRepo: QuestionRepository,
+
+    // Day 2 (2026-08-04): course + user repos for the teacher-facing
+    // human-readable name lookups. Both registered globally via the
+    // root container so we can @inject them without touching the
+    // spaced-repetition container module.
+    @inject(GLOBAL_TYPES.CourseRepo)
+    private readonly courseRepo: ICourseRepository,
+
+    @inject(GLOBAL_TYPES.UserRepo)
+    private readonly userRepo: IUserRepository,
   ) {
     super(database);
   }
@@ -807,11 +827,176 @@ class SpacedRepetitionService extends BaseService {
         courseId,
         session
       );
-      
-      return { 
-        courseId, 
+
+      return {
+        courseId,
         studentIds,
-        totalStudents: studentIds.length 
+        totalStudents: studentIds.length
+      };
+    });
+  }
+
+  // ── Day 2 (2026-08-04): teacher-facing human-readable name lookups ──────
+  //
+  // These three methods back the live endpoints that replace the
+  // day-1 mock-only `getCourses` / `getCourseStudentsRich` /
+  // `getQuestionSummary` calls. All three are admin-gated at the
+  // controller (see `_assertAdmin`). The legacy endpoint at
+  // `/courses/:courseId/students` keeps returning the raw-uid shape
+  // for backward-compat with any in-flight caller.
+
+  /**
+   * Lists every course that has at least one ReviewItem, each paired
+   * with the count of distinct students who have a schedule for it.
+   * Backs `GET /api/spaced-repetition/courses`.
+   *
+   * Implementation:
+   *  1. DISTINCT aggregation on `review_items` (1 round-trip) gives
+   *     `{ courseId, studentCount }[]`.
+   *  2. `ICourseRepository.getAllCourses()` (1 round-trip) gives the
+   *     full course list for name lookup.
+   *  3. Zip the two by courseId; courses with no schedule are dropped
+   *     (intentional — the teacher UI only cares about active cohorts).
+   *  4. Courses with a schedule but no matching `ICourse` doc
+   *     (shouldn't happen, but fail-open) render as `name: <id>`.
+   *
+   * Sorted by course id for stable ordering.
+   */
+  getCoursesInCohort(): Promise<CoursesListResponse> {
+    return this._withTransaction(async session => {
+      const counts = await this.reviewItemRepo.getDistinctCoursesWithStudentCount(
+        session,
+      );
+      const courses = await this.courseRepo.getAllCourses(session);
+      const courseMap = new Map(courses.map(c => [c._id.toString(), c]));
+
+      const summaries: TeacherCourseSummary[] = counts.map(({ courseId, studentCount }) => {
+        const course = courseMap.get(courseId);
+        return {
+          id: courseId,
+          name: course?.name ?? courseId,
+          studentCount,
+        };
+      });
+
+      return {
+        count: summaries.length,
+        courses: summaries,
+      };
+    });
+  }
+
+  /**
+   * Returns the rich student rows (id + name + email) for every
+   * student who has a schedule in the given course. Backs
+   * `GET /api/spaced-repetition/courses/:courseId/students-rich`.
+   *
+   * Replaces the legacy `getStudentsWithSchedules` (raw uids) for
+   * teacher-facing surfaces. The legacy method stays exported for
+   * backward-compat with any in-flight caller.
+   *
+   * Implementation:
+   *  1. DISTINCT query on `review_items` (1 round-trip) gives the
+   *     uids.
+   *  2. `IUserRepository.getUsersByIds(uids)` (1 round-trip) returns
+   *     the matching user docs in a single batch query — keeps the
+   *     N+1 pattern out of the hot path. Falls back to per-id lookups
+   *     only if the batch returns fewer rows than expected.
+   *  3. Zip the two by uid; missing user docs render as
+   *     `name: <uid>, email: ''` (fail-open, never throws).
+   *
+   * Sorted by display name (asc, case-insensitive) so the teacher
+   * picker shows students in a consistent order.
+   */
+  async getStudentsWithSchedulesRich(
+    courseId: string,
+  ): Promise<CourseStudentsRichResponse> {
+    return this._withTransaction(async session => {
+      const studentIds = await this.reviewItemRepo.getDistinctStudentsForCourse(
+        courseId,
+        session,
+      );
+      const users = await this.userRepo.getUsersByIds(studentIds);
+      const userMap = new Map(users.map(u => [u.firebaseUID, u]));
+
+      const students: EnrichedStudent[] = studentIds.map(id => {
+        const user = userMap.get(id);
+        const firstName = user?.firstName ?? '';
+        const lastName = user?.lastName ?? '';
+        const name = [firstName, lastName].filter(Boolean).join(' ').trim();
+        return {
+          id,
+          name: name || id,
+          email: user?.email ?? '',
+        };
+      });
+
+      // Stable ordering: by display name (case-insensitive), falling
+      // back to id for un-named rows so the order is deterministic.
+      students.sort((a, b) => {
+        const an = (a.name || a.id).toLowerCase();
+        const bn = (b.name || b.id).toLowerCase();
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+        return a.id.localeCompare(b.id);
+      });
+
+      return {
+        courseId,
+        students,
+        totalStudents: students.length,
+      };
+    });
+  }
+
+  /**
+   * Returns the question text + question type + bank titles for a
+   * single question. Backs `GET /api/spaced-repetition/questions/:questionId/summary`.
+   *
+   * Returns 404 if the question doesn't exist. Bank-title lookup is
+   * fail-open (logs and returns []) so a stale question doc (no
+   * matching bank) still renders the body in the teacher UI.
+   *
+   * Used by the teacher dashboard per-card row to preview the question
+   * text without a full review-card fetch (which would omit the
+   * correct answer via a separate code path).
+   */
+  async getQuestionSummary(questionId: string): Promise<QuestionSummaryResponse> {
+    return this._withTransaction(async session => {
+      const question = await this.questionRepo.getById(questionId, session);
+      if (!question) {
+        throw new NotFoundError(
+          `Question ${questionId} not found`,
+        );
+      }
+
+      // Bank titles: fail-open. `getQuestionBanksByQuestionId` returns
+      // IQuestionBank[]; we extract titles. If the lookup throws
+      // (e.g. malformed questionId), we log and return [] so the
+      // teacher UI still renders the body.
+      let bankTitles: string[] = [];
+      try {
+        const banks = await this.questionBankRepo.getQuestionBanksByQuestionId(
+          questionId,
+          session,
+        );
+        bankTitles = banks
+          .map(b => b.title)
+          .filter((t): t is string => typeof t === 'string' && t.length > 0);
+      } catch (err) {
+        console.error(
+          `[SpacedRepetitionService] getQuestionSummary: bank lookup failed for ${questionId}:`,
+          err,
+        );
+      }
+
+      return {
+        question: {
+          id: question._id.toString(),
+          body: question.text,
+          type: question.type,
+          bankTitles,
+        },
       };
     });
   }
@@ -909,6 +1094,47 @@ class SpacedRepetitionService extends BaseService {
         studentsAffected: distinctStudentsModified,
         itemsAffected: modifiedCount,
         message: `${enabled ? 'Enabled' : 'Disabled'} exam-prep mode for ${distinctStudentsModified} student${distinctStudentsModified === 1 ? '' : 's'}${modifiedCount !== distinctStudentsModified ? ` (${modifiedCount} review item${modifiedCount === 1 ? '' : 's'})` : ''}.`,
+      };
+    });
+  }
+
+  /**
+   * Bulk updates the `is_paused` flag for multiple students within a given
+   * course (added 2026-08-04 — Day 2 teacher control hooks).
+   *
+   * Mirrors `bulkUpdateExamPrepMode` exactly so the two endpoints share
+   * the same dual-count response shape (Bug 3 fix, 2026-08-01 — item-count
+   * vs student-count). The frontend uses this endpoint with a single
+   * studentId array (`[studentId]`) for the per-student
+   * "Pause All Reviews" / "Resume All Reviews" buttons in the teacher
+   * dashboard, so the same endpoint serves both single-student and
+   * cohort-scoped toggles.
+   *
+   * Paused items are excluded from `findDueItems` (see Knob 5 in
+   * `ReviewItemRepository.findDueItems`), so this acts as a hard kill
+   * switch for the review queue. The student can still see their items
+   * in the schedule/retention views, but nothing becomes due until the
+   * flag is cleared.
+   */
+  bulkUpdatePause(
+    studentIds: string[],
+    courseId: string,
+    paused: boolean,
+  ) {
+    return this._withTransaction(async session => {
+      const { modifiedCount, distinctStudentsModified } =
+        await this.reviewItemRepo.updatePauseBulk(
+          studentIds,
+          courseId,
+          paused,
+          session,
+        );
+
+      return {
+        updatedCount: modifiedCount,
+        studentsAffected: distinctStudentsModified,
+        itemsAffected: modifiedCount,
+        message: `${paused ? 'Paused' : 'Resumed'} reviews for ${distinctStudentsModified} student${distinctStudentsModified === 1 ? '' : 's'}${modifiedCount !== distinctStudentsModified ? ` (${modifiedCount} review item${modifiedCount === 1 ? '' : 's'})` : ''}.`,
       };
     });
   }
