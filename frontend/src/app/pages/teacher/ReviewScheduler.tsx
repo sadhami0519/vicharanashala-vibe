@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -135,14 +136,18 @@ export default function ReviewScheduler() {
     });
   };
 
-  // --- Manual Review Assignment (Knob 7, Phase C, 2026-07-21) ---
+  // --- Manual Review Assignment (Knob 7, Phase C, 2026-07-21, multi-student 2026-08-05) ---
 
   // Dialog open state + selected question inside the picker. The dialog
-  // requires exactly 1 student to be selected when opened, so we resolve
-  // the target student at open-time and keep it in a ref-like piece of
-  // state.
+  // now supports MULTIPLE students (Phase 3 / Teacher Dashboard Plan C
+  // bulleted 2026-08-05): the teacher picks 1+ students in the targets
+  // panel, the dialog pre-fills a checkbox strip of all of them, and
+  // the teacher can uncheck any they want to skip. Submit fans out
+  // assign-per-student via Promise.allSettled — backend `/assign` is
+  // idempotent on the (student_id, question_id) unique index, so a
+  // 409 collision is safely reported as "skipped" without retrying.
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
-  const [assignForStudent, setAssignForStudent] = useState<string | null>(null);
+  const [assignForStudents, setAssignForStudents] = useState<string[]>([]);
   const [selectedQuestionId, setSelectedQuestionId] = useState<string>("");
 
   // Fetch the assignable question catalogue for the current course.
@@ -151,79 +156,92 @@ export default function ReviewScheduler() {
   const { data: assignableData, isLoading: isLoadingAssignable } =
     useGetAssignableQuestions(courseId, assignDialogOpen);
 
-  // The assign mutation. We don't pass studentId to the hook (single
-  // student per dialog invocation), so we just call mutate() inside the
-  // dialog's submit handler.
+  // The assign mutation. We don't pass studentId to the hook (it's a
+  // per-student fan-out inside `submitAssign`), so we just call
+  // mutateAsync() in a loop.
   const assignMutation = useAssignReview();
-
-  // Boost mutation used as the recovery path when the assignment collides
-  // with an existing item (409). Keeps the user in flow — they pick a
-  // question, find out it's already assigned, and the dialog offers to
-  // surface it as overdue without forcing a re-open.
-  const boostMutationKnob7 = useBoostReview();
 
   const openAssignDialog = () => {
     if (!courseId) return toast.error("Pick a course first.");
     if (selectedStudents.length === 0) {
-      return toast.error("Select exactly one student to assign a review to.");
+      return toast.error("Select at least one student to assign a review to.");
     }
-    if (selectedStudents.length > 1) {
-      return toast.error(
-        "Manual assignment works on one student at a time. Reduce your selection and try again.",
-      );
-    }
-    setAssignForStudent(selectedStudents[0]);
+    // Pre-populate the dialog with all currently-selected students. The
+    // teacher can uncheck any they want to skip before submitting.
+    setAssignForStudents(selectedStudents);
     setSelectedQuestionId("");
     setAssignDialogOpen(true);
   };
 
-  const submitAssign = () => {
-    if (!assignForStudent) return;
-    if (!selectedQuestionId) return toast.error("Pick a question first.");
-    assignMutation.mutate(
-      { studentId: assignForStudent, questionId: selectedQuestionId, courseId },
-      {
-        onSuccess: (data) => {
-          if (data.autoEnabled) {
-            toast.success(
-              "Assigned. SR was disabled for this student — re-enabled to make the assignment actionable.",
-            );
-          } else {
-            toast.success(`Assigned "${selectedQuestionId}" to the student's queue.`);
-          }
-          setAssignDialogOpen(false);
-          setSelectedQuestionId("");
-          setAssignForStudent(null);
-        },
-        onError: (err: Error & { status?: number }) => {
-          if (err.status === 409) {
-            // Item already exists. Offer Boost instead: keep the dialog
-            // open so the teacher sees the recovery action without losing
-            // their pick.
-            toast.warning(
-              "Already in this student's queue. Boosting it instead...",
-              { duration: 2500 },
-            );
-            boostMutationKnob7.mutate(
-              { studentId: assignForStudent, questionId: selectedQuestionId },
-              {
-                onSuccess: () => {
-                  toast.success("Boosted — the question is now due.");
-                  setAssignDialogOpen(false);
-                  setSelectedQuestionId("");
-                  setAssignForStudent(null);
-                },
-                onError: (boostErr) => {
-                  toast.error(`Boost also failed: ${boostErr.message}`);
-                },
-              },
-            );
-          } else {
-            toast.error(`Assign failed: ${err.message}`);
-          }
-        },
-      },
+  const toggleAssignStudent = (studentId: string) => {
+    setAssignForStudents(prev =>
+      prev.includes(studentId)
+        ? prev.filter(sId => sId !== studentId)
+        : [...prev, studentId],
     );
+  };
+
+  const submitAssign = async () => {
+    if (assignForStudents.length === 0) {
+      return toast.error("Pick at least one student to assign to.");
+    }
+    if (!selectedQuestionId) return toast.error("Pick a question first.");
+    if (!courseId) return;
+
+    // Fan-out via Promise.allSettled so each student's failure is
+    // isolated. Backend `/assign` is idempotent on (student_id,
+    // question_id), so a 409 just means "already in that student's
+    // queue" — we count it as skipped without retrying.
+    const results = await Promise.allSettled(
+      assignForStudents.map((studentId) =>
+        assignMutation.mutateAsync({
+          studentId,
+          questionId: selectedQuestionId,
+          courseId,
+        }),
+      ),
+    );
+
+    const succeeded = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - succeeded;
+
+    // Multi-student summary toast. Single-student case keeps the old
+    // autoEnabled-aware wording so the auto-re-enable message stays
+    // visible when relevant.
+    if (assignForStudents.length === 1) {
+      const only = results[0];
+      if (only.status === "fulfilled") {
+        const data = only.value as { autoEnabled?: boolean };
+        if (data.autoEnabled) {
+          toast.success(
+            "Assigned. SR was disabled for this student — re-enabled to make the assignment actionable.",
+          );
+        } else {
+          toast.success(`Assigned "${selectedQuestionId}" to the student's queue.`);
+        }
+      } else {
+        const err = only.reason as Error & { status?: number };
+        if (err.status === 409) {
+          toast.warning(
+            "Already in this student's queue. Use Force Due (Boost) instead.",
+          );
+        } else {
+          toast.error(`Assign failed: ${err.message}`);
+        }
+      }
+    } else if (failed === 0) {
+      toast.success(`Assigned to all ${succeeded} students.`);
+    } else if (succeeded === 0) {
+      toast.error(`Failed to assign to any of the ${failed} students.`);
+    } else {
+      toast.warning(
+        `Assigned to ${succeeded}. ${failed} skipped (already in queue or error).`,
+      );
+    }
+
+    setAssignDialogOpen(false);
+    setSelectedQuestionId("");
+    setAssignForStudents([]);
   };
 
   return (
@@ -368,9 +386,10 @@ export default function ReviewScheduler() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="text-xs text-muted-foreground bg-muted/40 rounded-md p-2.5 border border-border/40">
-                  Select <span className="font-medium">exactly one</span> student in
+                  Select <span className="font-medium">one or more</span> students in
                   the targets panel above, then click the button below to open the
-                  question picker.
+                  question picker. The dialog pre-fills with your selection — uncheck
+                  any you want to skip before submitting.
                 </div>
                 <Button
                   variant="default"
@@ -381,16 +400,14 @@ export default function ReviewScheduler() {
                     !courseId
                       ? 'Pick a course first'
                       : selectedStudents.length === 0
-                        ? 'Select one student in the targets panel'
-                        : selectedStudents.length > 1
-                          ? 'Reduce to one student'
-                          : 'Open the question picker'
+                        ? 'Select one or more students in the targets panel'
+                        : 'Open the question picker'
                   }
                 >
                   <Send className="mr-2 h-4 w-4" /> Assign a Review to{' '}
                   {selectedStudents.length === 1
                     ? studentDisplay(selectedStudents[0]).name
-                    : 'Selected Student'}
+                    : `${selectedStudents.length} Students`}
                 </Button>
               </CardContent>
             </Card>
@@ -439,20 +456,64 @@ export default function ReviewScheduler() {
               Assign a Review
             </DialogTitle>
             <DialogDescription>
-              {assignForStudent ? (
+              {assignForStudents.length === 1 ? (
                 <>
                   Pick a question to put on{' '}
                   <span className="font-medium text-foreground">
-                    {studentDisplay(assignForStudent).name}
+                    {studentDisplay(assignForStudents[0]).name}
                   </span>
                   's next-review queue. The student will see it on their next
                   visit to the review screen.
+                </>
+              ) : assignForStudents.length > 1 ? (
+                <>
+                  Pick a question to put on{' '}
+                  <span className="font-medium text-foreground">
+                    {assignForStudents.length} students
+                  </span>
+                  ' next-review queues. Uncheck any you want to skip.
                 </>
               ) : (
                 'Pick a question.'
               )}
             </DialogDescription>
           </DialogHeader>
+
+          {/* Student checkbox strip (added 2026-08-05, Phase 3). Pre-fills
+              with the teacher selection from the targets panel; the
+              teacher can drop any before submitting. Renders only when
+              there are 2+ students (single-student case is already
+              conveyed in the description above). */}
+          {assignForStudents.length > 1 && (
+            <div
+              className="rounded-md border border-border bg-muted/30 p-3 space-y-1.5"
+              data-testid="assign-student-strip"
+            >
+              <div className="text-xs font-medium text-muted-foreground pb-1">
+                Recipients ({assignForStudents.length})
+              </div>
+              <div className="max-h-[140px] overflow-y-auto space-y-1 pr-1">
+                {assignForStudents.map((studentId) => {
+                  const checked = true; // always pre-checked; toggle removes
+                  return (
+                    <label
+                      key={studentId}
+                      className="flex items-center gap-2 rounded-sm px-2 py-1 cursor-pointer hover:bg-background/60"
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggleAssignStudent(studentId)}
+                        aria-label={`Remove ${studentDisplay(studentId).name} from assignment`}
+                      />
+                      <span className="text-sm">
+                        {studentDisplay(studentId).name}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-2">
             {isLoadingAssignable ? (
@@ -528,14 +589,14 @@ export default function ReviewScheduler() {
               onClick={() => {
                 setAssignDialogOpen(false);
                 setSelectedQuestionId('');
-                setAssignForStudent(null);
+                setAssignForStudents([]);
               }}
             >
               Cancel
             </Button>
             <Button
               onClick={submitAssign}
-              disabled={!selectedQuestionId || assignMutation.isPending}
+              disabled={!selectedQuestionId || assignForStudents.length === 0 || assignMutation.isPending}
             >
               {assignMutation.isPending ? (
                 <>
@@ -543,7 +604,10 @@ export default function ReviewScheduler() {
                 </>
               ) : (
                 <>
-                  <Send className="mr-2 h-4 w-4" /> Assign
+                  <Send className="mr-2 h-4 w-4" />{' '}
+                  {assignForStudents.length > 1
+                    ? `Assign to ${assignForStudents.length} Students`
+                    : 'Assign'}
                 </>
               )}
             </Button>

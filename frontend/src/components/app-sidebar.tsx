@@ -87,7 +87,12 @@ export function AppSidebar() {
       },
       {
         title: "Review Scheduler",
-        url: "/teacher/spaced-repetition", 
+        url: "/teacher/spaced-repetition",
+        icon: Brain,
+      },
+      {
+        title: "SR Dashboard",
+        url: "/teacher/spaced-repetition-dashboard",
         icon: Brain,
       },
       // {

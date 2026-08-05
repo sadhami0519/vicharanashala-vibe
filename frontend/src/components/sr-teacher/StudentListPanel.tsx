@@ -1,5 +1,5 @@
 import { useState, useMemo, type ReactNode } from 'react';
-import { Mail, Search, User, Users, X } from 'lucide-react';
+import { Mail, Search, User, Users, X, HelpCircle } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -108,6 +108,22 @@ export function StudentListPanel({
               {selectedStudentIds.length}/{list.length}
             </span>
           )}
+          {/* ⓘ help (added 2026-08-05, Phase 3): short, picker-specific copy.
+              Same pattern as the page-level InfoPopover but inlined as a
+              Self-contained title+body popover so this panel doesn't have
+              to import the long SpacedRepetitionInfoBody module. The
+              picker is small enough that a single 3-line tooltip is the
+              right scope. The page-level popover still covers the bigger
+              "what is spaced repetition" question. */}
+          <button
+            type="button"
+            aria-label="Help about the enrolled students picker"
+            title="Enrolled students picker"
+            className="ml-0.5 p-0.5 rounded text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="student-list-help-button"
+          >
+            <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         </div>
         {!isLoading && list.length > 0 && !hideSelectAll && (
           <button

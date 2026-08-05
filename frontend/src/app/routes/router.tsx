@@ -80,6 +80,7 @@ import ReviewSession from '@/app/pages/student/ReviewSession'
 import RetentionDashboard from '@/app/pages/student/RetentionDashboard'
 import ReviewScheduler from "@/app/pages/teacher/ReviewScheduler";
 import SupportDashboard from '@/app/pages/teacher/support-dashboard'
+import TeacherSRDashboard from "@/app/pages/teacher/TeacherSRDashboard";
 
 // Root route with error and notFound handling
 const rootRoute = new RootRoute({
@@ -772,6 +773,18 @@ export const shareLinkRoute = new Route({
   component: ShareLinkLanding
 })
 
+// Phase 3 (2026-08-05): NEW route. TeacherSRDashboard is the cohort
+// view (multi-select courses + multi-select students, aggregate
+// stats, per-student drill-down) that the Phase 3 work landed on.
+// Sibling to the single-student ReviewScheduler — no behavioural
+// change to /spaced-repetition. Path is flat so future route
+// additions don't accumulate slashes.
+const teacherSRDashboardRoute = new Route({
+  getParentRoute: () => teacherLayoutRoute,
+  path: '/spaced-repetition-dashboard',
+  component: TeacherSRDashboard,
+});
+
 // Create the router with the route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -817,6 +830,7 @@ const routeTree = rootRoute.addChildren([
     teacherHpSystemDashboardRoute,
     teacherCreateHpActivityRoute,
     teacherReviewSchedulerRoute,
+    teacherSRDashboardRoute,
     teacherStudentLedgerRoute,
     teacherStudentSubmissionsRoute,
     teacherSubmissionDetailsRoute,
