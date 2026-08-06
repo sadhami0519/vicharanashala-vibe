@@ -45,9 +45,9 @@ export default function ReviewScheduler() {
   const [hintText, setHintText] = useState("");
 
   // API Hooks
-  const boostMutation = useBoostReview(""); // ID passed at mutation time for loops
-  const hintMutation = useSetRemediationHint(""); 
-  const resetMutation = useResetReview("");
+  const boostMutation = useBoostReview(); // IDs passed at mutation time for loops
+  const hintMutation = useSetRemediationHint();
+  const resetMutation = useResetReview();
   const bulkNotifyMutation = useBulkUpdateNotifications();
   const bulkExamPrepMutation = useBulkUpdateExamPrep();
   const bulkSRDisabledMutation = useBulkSetStudentSRDisabled();

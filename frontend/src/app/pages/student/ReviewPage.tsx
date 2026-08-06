@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useSearch, Link } from '@tanstack/react-router';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Brain, CheckCircle, Play, Flame, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
@@ -11,7 +11,7 @@ import { DEMO_STUDENT_ID, isDemoStudentEmail } from '@/lib/spaced-repetition-api
 import { toast } from 'sonner';
 
 export default function ReviewPage() {
-  const { user } = useAuthStore();
+  const { user, token } = useAuthStore();
   // See RetentionDashboard for rationale. Demo email -> seeded DEMO_STUDENT_ID.
   const studentId =
     isDemoStudentEmail(user?.email) ? DEMO_STUDENT_ID : (user?.uid ?? '');
@@ -55,7 +55,7 @@ export default function ReviewPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token || ''}` // Assumes your auth store holds the token
+          'Authorization': `Bearer ${token || ''}` // Top-level token from auth store
         },
         body: JSON.stringify({
           questionId: currentCard.question_id,
@@ -90,7 +90,7 @@ export default function ReviewPage() {
         <CardTitle className="mb-2">You're all caught up!</CardTitle>
         <p className="text-muted-foreground mb-6">No cards are due for review right now.</p>
         <Button asChild>
-          <Link to="/student/dashboard">Back to Dashboard</Link>
+          <Link to="/student">Back to Dashboard</Link>
         </Button>
       </Card>
     );
@@ -187,7 +187,7 @@ export default function ReviewPage() {
       <CardTitle className="mb-2 text-emerald-700 text-2xl">Session Complete!</CardTitle>
       <p className="text-emerald-600/80 mb-8">Great job crushing those reviews.</p>
       <Button asChild size="lg">
-        <Link to="/student/dashboard">Return to Dashboard</Link>
+        <Link to="/student">Return to Dashboard</Link>
       </Button>
     </Card>
   );

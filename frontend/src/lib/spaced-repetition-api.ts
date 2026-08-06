@@ -740,12 +740,24 @@ export async function boostReview(
 /**
  * Set a remediation hint for a specific question.
  * PATCH /api/spaced-repetition/:studentId/remediation-hint
+ *
+ * Response mirrors the backend `SetRemediationHintResponse` exactly:
+ * `questionId` (the question this hint is attached to),
+ * `remediation_hint` (the canonical stored value after this write —
+ * identical to the `hint` arg unless the BE applies normalization),
+ * `message` (human-readable summary). FE callers today only read
+ * `message`; the other two are surfaced for type-honesty and any
+ * future "echo back the saved value" UX.
  */
 export async function setRemediationHint(
   studentId: string,
   questionId: string,
   hint: string | null,
-): Promise<{ message: string }> {
+): Promise<{
+  questionId: string;
+  remediation_hint: string | null;
+  message: string;
+}> {
   if (USE_MOCK) {
     await new Promise(r => setTimeout(r, 300));
     const idx = MOCK_REVIEW_ITEMS.findIndex(
@@ -757,7 +769,11 @@ export async function setRemediationHint(
       remediation_hint: hint,
     };
     persistMockState();
-    return { message: `Mock: Hint ${hint ? 'set' : 'cleared'} for ${questionId}` };
+    return {
+      questionId,
+      remediation_hint: hint,
+      message: `Mock: Hint ${hint ? 'set' : 'cleared'} for ${questionId}`,
+    };
   }
   return apiFetch(`/api/spaced-repetition/${studentId}/remediation-hint`, {
     method: 'PATCH',
@@ -1153,11 +1169,22 @@ export async function setStudentSRDisabled(
 /**
  * Bulk enable or disable SR for an array of students.
  * PATCH /api/spaced-repetition/bulk/sr-disabled
+ *
+ * Returns `BulkUpdateResponse` (Bug 3 fix, 2026-08-01, applied to the
+ * 4th bulk endpoint 2026-08-06 by audit R-15): dual-count shape so the
+ * teacher UI can say "Disabled SR for 3 students (0 state changes)"
+ * instead of the misleading "Disabled SR for 0 students" that the
+ * pre-fix `modifiedCount`-only return shape produced when the values
+ * were already correct.
+ *
+ * Mock path: `studentsAffected = studentIds.length`,
+ * `itemsAffected = studentIds.length` (mock has no notion of
+ * "already-disabled" → always treats each id as a transition).
  */
 export async function bulkSetStudentSRDisabled(
   studentIds: string[],
   sr_disabled: boolean,
-): Promise<{ updatedCount: number; message: string }> {
+): Promise<BulkUpdateResponse> {
   if (USE_MOCK) {
     await new Promise(r => setTimeout(r, 250));
     for (const id of studentIds) {
@@ -1169,16 +1196,18 @@ export async function bulkSetStudentSRDisabled(
     }
     persistSRDisabledState(MOCK_SR_DISABLED);
     return {
+      studentsAffected: studentIds.length,
+      itemsAffected: studentIds.length,
       updatedCount: studentIds.length,
       message: sr_disabled
-        ? `Mock: SR disabled for ${studentIds.length} student(s).`
-        : `Mock: SR re-enabled for ${studentIds.length} student(s).`,
+        ? `Mock: SR disabled for ${studentIds.length} student(s) (${studentIds.length} state change${studentIds.length === 1 ? '' : 's'}).`
+        : `Mock: SR re-enabled for ${studentIds.length} student(s) (${studentIds.length} state change${studentIds.length === 1 ? '' : 's'}).`,
     };
   }
   return apiFetch(`/api/spaced-repetition/bulk/sr-disabled`, {
     method: 'PATCH',
     body: JSON.stringify({ studentIds, sr_disabled }),
-  });
+  }) as unknown as Promise<BulkUpdateResponse>;
 }
 
 // ── Manual Review Assignment (Knob 7, Phase C, 2026-07-21) ───────────────

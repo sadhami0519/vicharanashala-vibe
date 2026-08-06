@@ -9,6 +9,7 @@ import {
   Min,
   Max,
   ArrayMinSize,
+  MaxLength,
 } from 'class-validator';
 import { RecallQuality } from '#spacedRepetition/interfaces/IReviewItem.js';
 
@@ -28,6 +29,9 @@ export class SetRemediationHintBody {
   /** The hint text to show after an incorrect answer. Pass null to clear. */
   @IsOptional()
   @IsString()
+  @MaxLength(200, {
+    message: 'Remediation hint must be 200 characters or fewer.',
+  })
   hint?: string | null;
 }
 
@@ -90,7 +94,16 @@ export class BulkSetStudentSRDisabledBody {
  * Response for PATCH /bulk/sr-disabled
  */
 export class BulkSetStudentSRDisabledResponse {
+  /** @deprecated Student count. See BulkPauseResponse. */
   updatedCount: number;
+
+  /** Distinct student count the bulk touched (Mongo `matchedCount`). */
+  studentsAffected: number;
+
+  /** Student count whose `sr_disabled` flag actually changed (Mongo `modifiedCount`). */
+  itemsAffected: number;
+
+  /** Human-readable summary, e.g. "Disabled SR for 3 students (0 state changes)." */
   message: string;
 }
 

@@ -103,23 +103,38 @@ class StudentSRStatusRepository {
   /**
    * Set the SR-disabled flag for many students in one round trip.
    * Used by the cohort-bulk endpoint.
-   * Returns the number of students whose flag was changed (modifiedCount).
+   *
+   * Returns BOTH `matchedCount` (students the bulk touched) AND
+   * `modifiedCount` (students whose flag actually changed value).
+   *
+   * Why both: matches the dual-count pattern applied to the other
+   * 3 bulk endpoints in 2026-08-01 (Bug 3 fix). The teacher UI needs
+   * `matchedCount` to say "Disabled SR for N students" (true even if
+   * the value was already correct) and `modifiedCount` to say how many
+   * state transitions actually happened. Without this distinction,
+   * the bulk-disable operation against students who were already
+   * disabled would report 0 and the toast would lie.
+   *
+   * audit-finding: phase-d-R-15 / phase-b-B-9 / phase-c-C-10 (2026-08-06).
    */
   async setStatusForMany(
     studentIds: string[],
     disabled: boolean,
     session?: ClientSession,
-  ): Promise<number> {
+  ): Promise<{ matchedCount: number; modifiedCount: number }> {
     await this.init();
     if (studentIds.length === 0) {
-      return 0;
+      return { matchedCount: 0, modifiedCount: 0 };
     }
     const result = await this.usersCollection.updateMany(
       { firebaseUID: { $in: studentIds } },
       { $set: { sr_disabled: disabled } },
       { session },
     );
-    return result.modifiedCount;
+    return {
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+    };
   }
 }
 

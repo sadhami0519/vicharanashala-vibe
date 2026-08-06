@@ -141,23 +141,43 @@ class SpacedRepetitionService extends BaseService {
 
   /**
    * Bulk-set the SR-disabled flag for many students.
-   * Returns the number of users whose flag was actually changed.
+   *
+   * Returns the same dual-count shape as the other 3 bulk endpoints
+   * (bulk-update-notifications, bulk-update-exam-prep, bulk-update-pause):
+   *   - `studentsAffected` = how many user docs the bulk touched (matched)
+   *   - `itemsAffected`     = how many actually transitioned (modified)
+   *   - `updatedCount`      = alias for `studentsAffected` (kept for
+   *                           frontend compatibility with the
+   *                           `BulkUpdateResponse` shape)
+   *
+   * Bug 3 (2026-08-01) fixed the dual-count for 3 of 4 bulk endpoints.
+   * This one missed the fix until the 2026-08-06 audit (R-15 / B-9 / C-10).
    */
   async bulkSetStudentSRStatus(
     studentIds: string[],
     disabled: boolean,
-  ): Promise<{ updatedCount: number; message: string }> {
+  ): Promise<{
+    studentsAffected: number;
+    itemsAffected: number;
+    updatedCount: number;
+    message: string;
+  }> {
     return this._withTransaction(async session => {
-      const updatedCount = await this.studentSRStatusRepo.setStatusForMany(
-        studentIds,
-        disabled,
-        session,
-      );
+      const { matchedCount, modifiedCount } =
+        await this.studentSRStatusRepo.setStatusForMany(
+          studentIds,
+          disabled,
+          session,
+        );
+      const studentsAffected = matchedCount;
+      const itemsAffected = modifiedCount;
       return {
-        updatedCount,
+        studentsAffected,
+        itemsAffected,
+        updatedCount: studentsAffected,
         message: disabled
-          ? `Disabled SR for ${updatedCount} student(s).`
-          : `Re-enabled SR for ${updatedCount} student(s).`,
+          ? `Disabled SR for ${studentsAffected} student(s) (${itemsAffected} state change${itemsAffected === 1 ? '' : 's'}).`
+          : `Re-enabled SR for ${studentsAffected} student(s) (${itemsAffected} state change${itemsAffected === 1 ? '' : 's'}).`,
       };
     });
   }
