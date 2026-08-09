@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useRef, type ReactNode } from "react"
 import { useQueries } from "@tanstack/react-query"
 import {
   useBoostReview,
@@ -9,17 +9,63 @@ import {
   useResetQuestion,
   useGetCourses,
   useGetCourseStudentsRich,
+  useBulkUpdateNotifications,
+  useBulkSetStudentSRDisabled,
+  useGetAssignableQuestions,
+  useAssignReview,
+  useSetRemediationHint,
 } from "@/hooks/spaced-repetition-hooks"
 import { spacedRepetitionKeys } from "@/hooks/spaced-repetition-hooks"
 import { studentDisplay, courseDisplay, getQuestionSummary, getSchedule, bulkUpdateExamPrepMode } from "@/lib/spaced-repetition-api"
 import { CourseMultiSelectCard } from "@/components/sr-teacher/CourseMultiSelectCard"
 import { StudentListPanel } from "@/components/sr-teacher/StudentListPanel"
+import { HintPopover } from "@/components/sr-teacher/HintPopover"
+import { cn } from "@/utils/utils"
+import { InfoPopover } from "@/components/InfoPopover"
+import { SpacedRepetitionInfoBody, SPACED_REPETITION_INFO_TITLE } from "@/components/spaced-repetition-info"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Zap, Pause, Play, RotateCcw, BookOpen, Clock, AlertCircle, GraduationCap, ChevronDown, ChevronRight, Users } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Loader2, Zap, Pause, Play, RotateCcw, BookOpen, Clock, AlertCircle, GraduationCap, ChevronDown, ChevronRight, Users, Bell, BellOff, Ban, Power, Send, Library, MessageSquareText, Lightbulb } from "lucide-react"
 import { toast } from "sonner"
 import type { ReviewItem } from "@/types/spaced-repetition.types"
+
+/**
+ * Human-friendly relative-time formatter for the per-card "next review due"
+ * column. Days-precision only — matches the existing `interval_days` field
+ * already shown on each card. Designed to read at a glance:
+ *   - "today" / "tomorrow"  → short, no unit suffix
+ *   - "overdue 2d"          → negative prefix, days count, unit
+ *   - "in 5d"               → positive prefix, days count, unit
+ *   - "-"                    → for invalid / unparseable input (defensive)
+ *
+ * Stays local to this file because no other dashboard needs the exact
+ * shape. If a second consumer appears, promote to `utils/`.
+ */
+function formatRelativeWhen(iso: string | null | undefined): string {
+  if (!iso) return "-"
+  const ts = new Date(iso).getTime()
+  if (!Number.isFinite(ts)) return "-"
+  const diffMs = ts - Date.now()
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24))
+  if (diffDays === 0) return "today"
+  if (diffDays === 1) return "tomorrow"
+  if (diffDays === -1) return "yesterday"
+  if (diffDays > 0) return `in ${diffDays}d`
+  // diffDays < -1: overdue. Use a positive count for readability.
+  return `overdue ${Math.abs(diffDays)}d`
+}
 
 function retentionColor(ef: number) {
   if (ef >= 2.5) return "text-green-600"
@@ -78,7 +124,7 @@ function computeStudentStats(items: ReviewItem[]): {
   const examModeCount = items.filter(i => i.exam_prep_mode).length
   const avgEF = items.length
     ? (items.reduce((s, i) => s + i.EF, 0) / items.length).toFixed(2)
-    : "—"
+    : "-"
   const isPaused = pausedCount === items.length && items.length > 0
   const isExamMode = examModeCount > 0
   return { total: items.length, overdue, pausedCount, examModeCount, avgEF, isPaused, isExamMode }
@@ -94,6 +140,16 @@ export default function TeacherSRDashboard() {
   const [selectedCourses, setSelectedCourses] = useState<string[]>([])
   const [selectedStudents, setSelectedStudents] = useState<string[]>([])
   const primaryCourseId = selectedCourses[0] ?? ""
+
+  // Scroll target for the StudentListPanel empty-state CTA (added 2026-08-11,
+  // audit G4): clicking "Pick a different course" scrolls the page up to
+  // the course picker so the teacher can fix the wrong course selection.
+  // Ref lives on the course picker card below; smooth scroll keeps the
+  // navigation friendly.
+  const coursePickerRef = useRef<HTMLDivElement | null>(null)
+  const scrollToCoursePicker = () => {
+    coursePickerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   // `expandedStudentIds` is the inline-expand drill-down state (added
   // 2026-08-05, Phase 3). A Set keyed by studentId lets us toggle
@@ -118,6 +174,12 @@ export default function TeacherSRDashboard() {
   const { data: studentsData } = useGetCourseStudentsRich(primaryCourseId)
   const richStudents = studentsData?.students
 
+  // `useGetCourses` is hoisted to the top of the component (Rules of Hooks).
+  // Earlier versions called it inside a JSX prop and inside an `onToggleAll`
+  // callback - both violations. The two readers below (the JSX `courses` prop
+  // and the `Select all` handler) now share this single captured value.
+  const { data: coursesData } = useGetCourses()
+
   // Fan-out: one `useGetSchedule` per selected student. Aggregating
   // across all selected students lets us render the cohort stats header
   // and per-student cards without a separate "load each student"
@@ -125,7 +187,7 @@ export default function TeacherSRDashboard() {
   // so the cache is deduped if a single-student caller ever appears.
   // The queryFn calls the underlying `getSchedule` directly (calling
   // the hook itself inside queryFn would return a `UseQueryResult`,
-  // not a Promise — not what `useQueries` expects).
+  // not a Promise - not what `useQueries` expects).
   const scheduleQueries = useQueries({
     queries: selectedStudents.map(studentId => ({
       queryKey: spacedRepetitionKeys.schedule(studentId),
@@ -212,41 +274,339 @@ export default function TeacherSRDashboard() {
   // misclick on a busy desk.
   const BULK_CONFIRM_THRESHOLD = 20
 
+  // C4 audit fix (2026-08-11): one shared confirm dialog for all bulk
+  // actions. The dialog's title + description + button labels are
+  // derived from a `pendingBulkAction` payload so we don't need 3
+  // separate dialog instances. The dialog only opens when the bulk
+  // action exceeds `BULK_CONFIRM_THRESHOLD`; below that we run silently.
+  //
+  // Shape of `pendingBulkAction`:
+  //   - kind        = which bulk action is being confirmed
+  //   - enabled     = for kind=exam_prep, whether we're turning it on
+  //                   (true) or off (false). For kind=sr_disabled,
+  //                   whether we're pausing (true) or resuming (false).
+  //                   For kind=notifications, the opt-out flag (true =
+  //                   pause reminders, false = resume them).
+  //   - summary     = the human-readable count the dialog should show
+  //                   ("24 (course × student) pairs", "12 students").
+  //   - run         = the async fn to invoke on confirm.
+  //
+  // Storing the run function inside state is fine because it captures
+  // only the selected IDs + the action direction (no stale React state
+  // captured mid-render).
+  const [pendingBulkAction, setPendingBulkAction] = useState<{
+    kind: "notifications" | "sr_disabled" | "exam_prep"
+    enabled: boolean
+    summary: { courses: number; students: number; pairs: number }
+    run: () => Promise<void>
+  } | null>(null)
+  const [bulkActionPending, setBulkActionPending] = useState(false)
+
+  // Bulk SR-disabled hook (C4 audit fix, 2026-08-11). Student-level
+  // flag (`user.sr_disabled`), not a per-course flag, so a single HTTP
+  // call covers any number of courses selected.
+  const bulkSRDisabledMutation = useBulkSetStudentSRDisabled()
+
+  // Bulk notifications hook (C4 audit fix, 2026-08-11). Hooks into
+  // the same fan-out pattern as bulk exam-prep: one HTTP round-trip
+  // per course with all selected students in that course. Notifications
+  // live on `review_items.notification_opt_out`, scoped per (course
+  // × student), so the fan-out shape matches exam-prep.
+  const bulkNotifyMutation = useBulkUpdateNotifications()
+
+  async function bulkToggleNotifications(optOut: boolean) {
+    if (selectedCourses.length === 0 || selectedStudents.length === 0) {
+      return toast.error("Select at least one course and one student.")
+    }
+    const totalPairs = selectedCourses.length * selectedStudents.length
+    if (totalPairs > BULK_CONFIRM_THRESHOLD) {
+      setPendingBulkAction({
+        kind: "notifications",
+        enabled: optOut,
+        summary: { courses: selectedCourses.length, students: selectedStudents.length, pairs: totalPairs },
+        run: () => runBulkToggleNotifications(optOut),
+      })
+      return
+    }
+    await runBulkToggleNotifications(optOut)
+  }
+  async function runBulkToggleNotifications(optOut: boolean) {
+    setBulkActionPending(true)
+    try {
+      const results = await Promise.allSettled(
+        selectedCourses.map(courseId =>
+          bulkNotifyMutation.mutateAsync({ courseId, studentIds: selectedStudents, optOut }),
+        ),
+      )
+      const succeeded = results.filter(r => r.status === "fulfilled").length
+      const failed = selectedCourses.length - succeeded
+      // Per the backend dual-count contract (Bug 3 fix, 2026-08-01): the
+      // server's `message` distinguishes student count from item count
+      // (e.g. "Updated notifications for 3 students (6 review items).").
+      // We trust the server message - but only for the success case. If
+      // any course failed, we surface our own summary so the teacher can
+      // tell which courses skipped.
+      if (failed === 0 && succeeded > 0) {
+        // First fulfilled result carries the canonical message from the
+        // backend. All courses hit the same set of students in this
+        // happy path, so the message is representative.
+        const data = (results[0] as PromiseFulfilledResult<{ message: string }>).value
+        toast.success(data.message)
+      } else if (succeeded === 0) {
+        toast.error(`Failed to update notifications for any of the ${failed} courses.`)
+      } else {
+        toast.warning(`Updated ${succeeded} course${succeeded === 1 ? "" : "s"}. ${failed} skipped.`)
+      }
+    } finally {
+      setBulkActionPending(false)
+      setPendingBulkAction(null)
+    }
+  }
+
+  async function bulkToggleSRDisabled(sr_disabled: boolean) {
+    if (selectedStudents.length === 0) {
+      return toast.error("Select at least one student to pause spaced repetition for.")
+    }
+    // Single-batch mutation: the backend's `bulkSetStudentSRDisabled`
+    // is student-level (courseId is ignored), so the count we confirm
+    // on is just the student count. The dedupe happens server-side.
+    const totalStudents = selectedStudents.length
+    if (totalStudents > BULK_CONFIRM_THRESHOLD) {
+      setPendingBulkAction({
+        kind: "sr_disabled",
+        enabled: sr_disabled,
+        summary: { courses: selectedCourses.length, students: totalStudents, pairs: totalStudents },
+        run: () => runBulkToggleSRDisabled(sr_disabled),
+      })
+      return
+    }
+    await runBulkToggleSRDisabled(sr_disabled)
+  }
+  async function runBulkToggleSRDisabled(sr_disabled: boolean) {
+    setBulkActionPending(true)
+    try {
+      const data = await bulkSRDisabledMutation.mutateAsync({
+        studentIds: selectedStudents,
+        sr_disabled,
+      })
+      toast.success(
+        sr_disabled
+          ? `Paused spaced repetition for ${data.updatedCount} student${data.updatedCount === 1 ? "" : "s"}.`
+          : `Resumed spaced repetition for ${data.updatedCount} student${data.updatedCount === 1 ? "" : "s"}.`,
+      )
+    } catch (e: unknown) {
+      toast.error((e as Error)?.message ?? "Bulk toggle for spaced repetition failed")
+    } finally {
+      setBulkActionPending(false)
+      setPendingBulkAction(null)
+    }
+  }
+
+  // ── Manual Review Assignment (ported 2026-08-09 from ReviewScheduler) ──
+  // Dialog state. The button that opens this lives in the Bulk Global
+  // Controls Card (cohesion: all cohort-wide teacher actions in one
+  // place). Pre-populates the dialog with the current `selectedStudents`
+  // - the teacher can uncheck any they want to skip before submitting.
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false)
+  const [assignForStudents, setAssignForStudents] = useState<string[]>([])
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string>("")
+
+  // Fetch the assignable question catalogue for the primary selected
+  // course. We only fire when the dialog is open AND a course is
+  // selected, so the list isn't pulled for every teacher sitting on
+  // the dashboard.
+  const { data: assignableData, isLoading: isLoadingAssignable } =
+    useGetAssignableQuestions(primaryCourseId, assignDialogOpen)
+
+  // The assign mutation is per-student (backend `/assign` is single-
+  // student), so `submitAssign` fans out via `Promise.allSettled`.
+  const assignMutation = useAssignReview()
+
+  // ── Per-card Set Hint (ported 2026-08-09 from ReviewScheduler) ──────
+  // Tracks which (studentId × questionId) is currently being edited
+  // and what the new hint text is. Open editor takes a copy of the
+  // existing hint as the initial value; closing without saving discards.
+  // We use one Dialog at the page root (like Assign) and key the
+  // content on the current item, rather than one dialog per item row.
+  const [hintEditor, setHintEditor] = useState<{
+    studentId: string
+    questionId: string
+    existingHint: string | null
+    draft: string
+  } | null>(null)
+  const hintMutation = useSetRemediationHint()
+
+  function openHintEditor(studentId: string, questionId: string, existingHint: string | null) {
+    setHintEditor({ studentId, questionId, existingHint, draft: existingHint ?? "" })
+  }
+
+  function closeHintEditor() {
+    setHintEditor(null)
+  }
+
+  async function saveHint() {
+    if (!hintEditor) return
+    // Empty string → null (clear the hint). Trim leading/trailing
+    // whitespace so " " doesn't accidentally save as a real hint.
+    const trimmed = hintEditor.draft.trim()
+    const newHint = trimmed.length === 0 ? null : trimmed
+    // Skip no-op writes (existing hint unchanged). Avoids unnecessary
+    // network round-trip and the toast noise for a click that
+    // cancelled.
+    if (newHint === hintEditor.existingHint) {
+      closeHintEditor()
+      return
+    }
+    try {
+      await hintMutation.mutateAsync({
+        studentId: hintEditor.studentId,
+        questionId: hintEditor.questionId,
+        hint: newHint,
+      })
+      toast.success(
+        newHint
+          ? `Hint saved for question ${hintEditor.questionId.slice(-6)}`
+          : `Hint cleared for question ${hintEditor.questionId.slice(-6)}`,
+      )
+      closeHintEditor()
+      // Refetch all affected schedules so the badge updates everywhere.
+      scheduleQueries.forEach(q => q.refetch())
+    } catch (e: unknown) {
+      toast.error((e as Error)?.message ?? "Failed to save hint")
+    }
+  }
+
+  function openAssignDialog() {
+    if (selectedCourses.length === 0) {
+      return toast.error("Pick a course first.")
+    }
+    if (selectedStudents.length === 0) {
+      return toast.error("Select at least one student to assign a review to.")
+    }
+    // Pre-populate with the current cohort selection.
+    setAssignForStudents(selectedStudents)
+    setSelectedQuestionId("")
+    setAssignDialogOpen(true)
+  }
+
+  function toggleAssignStudent(studentId: string) {
+    setAssignForStudents(prev =>
+      prev.includes(studentId)
+        ? prev.filter(sId => sId !== studentId)
+        : [...prev, studentId],
+    )
+  }
+
+  async function submitAssign() {
+    if (assignForStudents.length === 0) {
+      return toast.error("Pick at least one student to assign to.")
+    }
+    if (!selectedQuestionId) return toast.error("Pick a question first.")
+    if (!primaryCourseId) return
+
+    // Fan-out via Promise.allSettled so each student's failure is
+    // isolated. Backend `/assign` is idempotent on (student_id,
+    // question_id), so a 409 collision is safely reported as
+    // "skipped" without retrying.
+    const results = await Promise.allSettled(
+      assignForStudents.map((studentId) =>
+        assignMutation.mutateAsync({
+          studentId,
+          questionId: selectedQuestionId,
+          courseId: primaryCourseId,
+        }),
+      ),
+    )
+
+    const succeeded = results.filter((r) => r.status === "fulfilled").length
+    const failed = results.length - succeeded
+
+    // Summary toasts match the ReviewScheduler pattern: single-student
+    // case keeps the autoEnabled-aware wording; multi-student case
+    // uses a simple succeeded/failed count.
+    if (assignForStudents.length === 1) {
+      const only = results[0]
+      if (only.status === "fulfilled") {
+        const data = only.value as { autoEnabled?: boolean }
+        if (data.autoEnabled) {
+          toast.success(
+            "Spaced repetition was paused for this student — resumed automatically so the assignment takes effect.",
+          )
+        } else {
+          toast.success(`Assigned "${selectedQuestionId}" to the student's queue.`)
+        }
+      } else {
+        const err = only.reason as Error & { status?: number }
+        if (err.status === 409) {
+          toast.warning(
+            "This question is already on the student's review queue. Use 'Make due now' on the per-card row to push it to the front instead.",
+          )
+        } else {
+          toast.error(`Assign failed: ${err.message}`)
+        }
+      }
+    } else if (failed === 0) {
+      toast.success(`Assigned to all ${succeeded} students.`)
+    } else if (succeeded === 0) {
+      toast.error(`Failed to add the review question for any of the ${failed} student${failed === 1 ? "" : "s"}.`)
+    } else {
+      toast.warning(
+        `Assigned to ${succeeded}. ${failed} skipped (already in queue or error).`,
+      )
+    }
+
+    setAssignDialogOpen(false)
+    setSelectedQuestionId("")
+    setAssignForStudents([])
+  }
+
   async function bulkToggleExamPrep(enabled: boolean) {
     if (selectedCourses.length === 0 || selectedStudents.length === 0) {
       return toast.error("Select at least one course and one student.")
     }
     const totalPairs = selectedCourses.length * selectedStudents.length
     if (totalPairs > BULK_CONFIRM_THRESHOLD) {
-      const ok = window.confirm(
-        `You're about to ${enabled ? "enable" : "disable"} Exam-Prep Mode for ${totalPairs} (course × student) pairs. Continue?`,
+      setPendingBulkAction({
+        kind: "exam_prep",
+        enabled,
+        summary: { courses: selectedCourses.length, students: selectedStudents.length, pairs: totalPairs },
+        run: () => runBulkToggleExamPrep(enabled),
+      })
+      return
+    }
+    await runBulkToggleExamPrep(enabled)
+  }
+  async function runBulkToggleExamPrep(enabled: boolean) {
+    setBulkActionPending(true)
+    try {
+      const results = await Promise.allSettled(
+        selectedCourses.map(courseId =>
+          bulkUpdateExamPrepMode(courseId, selectedStudents, enabled),
+        ),
       )
-      if (!ok) return
+      const succeeded = results.filter(r => r.status === "fulfilled").length
+      const failed = selectedCourses.length - succeeded
+      // The dual-count response (per the bulk endpoints) carries the
+      // item-level totals. We only surface the simpler pair-count here
+      // because the dashboard is the cohort view, not the per-course
+      // per-item view (which is ReviewScheduler).
+      if (failed === 0) {
+        toast.success(`Exam-Prep ${enabled ? "enabled" : "disabled"} across ${succeeded} course${succeeded === 1 ? "" : "s"} (${selectedCourses.length * selectedStudents.length} pair${selectedCourses.length * selectedStudents.length === 1 ? "" : "s"}).`)
+      } else if (succeeded === 0) {
+        toast.error(`Failed to update any of the ${failed} courses.`)
+      } else {
+        toast.warning(`Updated ${succeeded} course${succeeded === 1 ? "" : "s"}. ${failed} skipped.`)
+      }
+      // Refetch all affected schedules.
+      scheduleQueries.forEach(q => q.refetch())
+    } finally {
+      setBulkActionPending(false)
+      setPendingBulkAction(null)
     }
-    const results = await Promise.allSettled(
-      selectedCourses.map(courseId =>
-        bulkUpdateExamPrepMode(courseId, selectedStudents, enabled),
-      ),
-    )
-    const succeeded = results.filter(r => r.status === "fulfilled").length
-    const failed = selectedCourses.length - succeeded
-    // The dual-count response (per the bulk endpoints) carries the
-    // item-level totals. We only surface the simpler pair-count here
-    // because the dashboard is the cohort view, not the per-course
-    // per-item view (which is ReviewScheduler).
-    if (failed === 0) {
-      toast.success(`Exam-Prep ${enabled ? "enabled" : "disabled"} across ${succeeded} course${succeeded === 1 ? "" : "s"} (${totalPairs} pair${totalPairs === 1 ? "" : "s"}).`)
-    } else if (succeeded === 0) {
-      toast.error(`Failed to update any of the ${failed} courses.`)
-    } else {
-      toast.warning(`Updated ${succeeded} course${succeeded === 1 ? "" : "s"}. ${failed} skipped.`)
-    }
-    // Refetch all affected schedules.
-    scheduleQueries.forEach(q => q.refetch())
   }
 
   // Per-card (single-student, single-question) mutations. These stay
-  // scoped to the per-student card they're rendered in — the expanded
+  // scoped to the per-student card they're rendered in - the expanded
   // view passes them a studentId + questionId directly.
   const boost = useBoostReview()
   const reset = useResetQuestion("")
@@ -267,8 +627,27 @@ export default function TeacherSRDashboard() {
     }
   }
 
-  async function handleReset(studentId: string, questionId: string) {
-    if (!confirm("Reset this question? Student will relearn from scratch.")) return
+  // C4 audit fix (2026-08-11): the per-card "Send back" confirm used to
+  // call the native `confirm()` dialog. Now it stages a shared shadcn
+  // dialog (one dialog for all per-card resets, same approach as the
+  // bulk-confirm pattern above). The pending payload is held in state
+  // until the teacher confirms or cancels.
+  const [pendingReset, setPendingReset] = useState<{
+    studentId: string
+    questionId: string
+    questionShort: string
+  } | null>(null)
+  const [resetPending, setResetPending] = useState(false)
+
+  function requestHandleReset(studentId: string, questionId: string) {
+    setPendingReset({
+      studentId,
+      questionId,
+      questionShort: questionId.slice(-6),
+    })
+  }
+  async function runHandleReset(studentId: string, questionId: string) {
+    setResetPending(true)
     setActionLoading(`${studentId}-${questionId}-reset`)
     try {
       const r = await reset.mutateAsync(questionId)
@@ -279,6 +658,8 @@ export default function TeacherSRDashboard() {
       toast.error((e as Error)?.message ?? "Reset failed")
     } finally {
       setActionLoading(null)
+      setResetPending(false)
+      setPendingReset(null)
     }
   }
 
@@ -288,7 +669,7 @@ export default function TeacherSRDashboard() {
   // at a time without affecting the cohort.
   function PerStudentGlobalControls({ studentId }: { studentId: string }) {
     // Lightweight per-student mutations. We use a single primary
-    // course for the toggle (the first selected course) — hovering
+    // course for the toggle (the first selected course) - hovering
     // shows a tooltip explaining the scope.
     const examPrep = useSetExamPrepMode(studentId, primaryCourseId)
     const pause = useSetPaused(studentId, primaryCourseId)
@@ -326,13 +707,18 @@ export default function TeacherSRDashboard() {
           onClick={toggleExamPrep}
           disabled={examPrep.isPending}
           className="h-7 text-xs"
-          title={`Toggle Exam-Prep mode for this student in ${courseDisplay(primaryCourseId).name || "the selected course"}`}
+          title={
+            isExamMode
+              ? `Exam-prep is on for this student in ${courseDisplay(primaryCourseId).name || "this course"} (hardest cards surface first). Click to turn off.`
+              : `Switch this student into exam-prep mode for ${courseDisplay(primaryCourseId).name || "this course"} (hardest cards surface first).`
+          }
         >
           {examPrep.isPending ? (
             <Loader2 className="w-3 h-3 animate-spin" />
           ) : (
             <Zap className="w-3 h-3" />
           )}
+          <span className="ml-1">{isExamMode ? "Exam-prep on" : "Exam-prep"}</span>
         </Button>
         <Button
           variant={isPaused ? "destructive" : "outline"}
@@ -340,7 +726,11 @@ export default function TeacherSRDashboard() {
           onClick={togglePause}
           disabled={pause.isPending}
           className="h-7 text-xs"
-          title={`Toggle reviews for this student in ${courseDisplay(primaryCourseId).name || "the selected course"}`}
+          title={
+            isPaused
+              ? `Reminders are paused for this student in ${courseDisplay(primaryCourseId).name || "this course"}. Click to resume.`
+              : `Pause review reminders for this student in ${courseDisplay(primaryCourseId).name || "this course"}. Reviews still accumulate.`
+          }
         >
           {pause.isPending ? (
             <Loader2 className="w-3 h-3 animate-spin" />
@@ -349,6 +739,7 @@ export default function TeacherSRDashboard() {
           ) : (
             <Pause className="w-3 h-3" />
           )}
+          <span className="ml-1">{isPaused ? "Paused" : "Pause"}</span>
         </Button>
       </div>
     )
@@ -375,9 +766,33 @@ export default function TeacherSRDashboard() {
       <div className="flex items-center gap-3 border-l-4 border-violet-500 pl-4 -ml-4">
         <BookOpen className="w-7 h-7 text-violet-600" aria-hidden="true" />
         <div>
-          <h1 className="text-2xl font-semibold">Teacher review controls</h1>
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
+            Teacher review controls
+            {/* Page-level help (added 2026-08-08): mirrors the student
+                retention dashboard. Points at the shared module-level
+                SpacedRepetitionInfoBody so the "what is spaced
+                repetition" explanation lives in one place. The picker-
+                and section-level InfoPopovers carry their own scoped
+                bodies.
+
+                UI-prominence tweak (2026-08-09 new-mentor audit, item
+                B1/B2): bumped the trigger to indigo + larger so first-
+                time mentors notice it as the "start here" anchor. The
+                6 section-level InfoPopovers stay small + slate so the
+                visual hierarchy says "read me first" -> "scoped help". */}
+            <InfoPopover
+              title={SPACED_REPETITION_INFO_TITLE}
+              ariaLabel="Open the Spaced Repetition explainer - recommended for first-time use"
+              triggerClassName="h-7 w-7 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 focus:ring-indigo-300"
+            >
+              <SpacedRepetitionInfoBody />
+            </InfoPopover>
+          </h1>
           <p className="text-sm text-muted-foreground">
-            Pick one or more courses, then one or more students, to view and adjust their review schedules.
+            Pick one or more courses and one or more students. The cohort dashboard
+            shows each student&apos;s memory strength, due cards, and review activity
+            - and lets you bulk-edit reminders, assign specific review questions, or
+            pause spaced repetition for an entire class.
           </p>
         </div>
       </div>
@@ -388,11 +803,29 @@ export default function TeacherSRDashboard() {
           below). The new CourseMultiSelectCard has its own search bar
           inside, so the very first thing a teacher sees is a filterable
           list with checkboxes. */}
-      <Card className="border-violet-200/60">
+      <Card ref={coursePickerRef} className="border-violet-200/60 scroll-mt-4" data-testid="course-picker-card">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-violet-100 text-violet-700 text-xs font-bold">1</span>
             Choose courses
+            {/* Section-level help (added 2026-08-08): explains the role of
+                this section within the page. The picker card itself has
+                a more specific help icon (how to search, what "main"
+                course means). */}
+            <InfoPopover
+              title="About choosing courses"
+              ariaLabel="Help about choosing courses"
+              triggerClassName="h-5 w-5"
+            >
+              <p>
+                This is where you decide <strong>which classes</strong> to
+                look at. Pick one class, or tick several to compare them.
+              </p>
+              <p>
+                Once you pick a class, the next section will let you choose
+                the students from that class.
+              </p>
+            </InfoPopover>
           </CardTitle>
           <CardDescription>
             Multi-select. Use the checkboxes to build a cohort across multiple courses.
@@ -400,7 +833,7 @@ export default function TeacherSRDashboard() {
         </CardHeader>
         <CardContent>
           <CourseMultiSelectCard
-            courses={useGetCourses().data}
+            courses={coursesData}
             selectedCourseIds={selectedCourses}
             onToggle={(id) => {
               setSelectedCourses(prev =>
@@ -410,7 +843,7 @@ export default function TeacherSRDashboard() {
             }}
             onToggleAll={() => {
               setSelectedCourses(prev =>
-                prev.length > 0 ? [] : ((useGetCourses().data ?? []).map(c => c.id))
+                prev.length > 0 ? [] : ((coursesData ?? []).map(c => c.id))
               )
               setSelectedStudents([])
             }}
@@ -436,6 +869,24 @@ export default function TeacherSRDashboard() {
             <CardTitle className="text-base flex items-center gap-2">
               <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-violet-100 text-violet-700 text-xs font-bold">2</span>
               Choose students
+              {/* Section-level help (added 2026-08-08): mirrors the Section 1
+                  pattern. The StudentListPanel itself carries a more
+                  specific help icon (search, multi-select). */}
+              <InfoPopover
+                title="About choosing students"
+                ariaLabel="Help about choosing students"
+                triggerClassName="h-5 w-5"
+              >
+                <p>
+                  This is where you decide <strong>which students</strong> to
+                  check on. Tick one or tick a whole batch.
+                </p>
+                <p>
+                  The list only shows students from the main course you
+                  picked above. If you don&apos;t see a student, try
+                  picking a different main course first.
+                </p>
+              </InfoPopover>
             </CardTitle>
             <CardDescription>
               Multi-select. Search by name or email. The dashboard below aggregates stats across all selected students.
@@ -474,6 +925,14 @@ export default function TeacherSRDashboard() {
                   </Badge>
                 )
               }
+              // G4 audit fix (2026-08-11): when a teacher picks a course
+              // that has no students with review schedules yet, give
+              // them an escape hatch — scroll back to the course picker
+              // so they can pick a different course.
+              emptyStateCta={{
+                label: 'Pick a different course',
+                onClick: scrollToCoursePicker,
+              }}
             />
           </CardContent>
         </Card>
@@ -497,10 +956,40 @@ export default function TeacherSRDashboard() {
                     <Users className="w-5 h-5 text-violet-700" aria-hidden="true" />
                   </div>
                   <div className="min-w-0">
-                    <div className="font-medium text-foreground truncate">
+                    <div className="font-medium text-foreground truncate flex items-center gap-2">
                       {selectedStudents.length} student{selectedStudents.length === 1 ? "" : "s"}
                       {" across "}
                       {selectedCourses.length} course{selectedCourses.length === 1 ? "" : "s"}
+                      {/* Section 3 help (added 2026-08-08): scoped to the
+                          cohort dashboard. Section 3 doesn't have a single
+                          CardTitle like 1/2, so the help lives next to the
+                          aggregate "N students across M courses" anchor. */}
+                      <InfoPopover
+                        title="About the cohort dashboard"
+                        ariaLabel="Help about the cohort dashboard"
+                        triggerClassName="h-5 w-5 shrink-0"
+                      >
+                        <p>
+                          This is the <strong>overview</strong> for everyone
+                          you picked. The four tiles at the top show how many
+                          review cards exist, how many are due now, and the
+                          cohort&apos;s average memory strength.
+                        </p>
+                        <p>
+                          <strong>Bulk controls for the cohort</strong> apply a
+                          change to every selected student at once. Use them
+                          for things like flipping everyone into exam-prep
+                          mode before a test, or pausing review reminders for
+                          a quiet week.
+                        </p>
+                        <p>
+                          <strong>Per-student breakdown</strong> lets you
+                          expand each student to see their individual cards.
+                          That&apos;s where you mark a hard question as due
+                          now, send one back to the start, or write a hint
+                          your student will see on review.
+                        </p>
+                      </InfoPopover>
                     </div>
                     <div className="text-xs text-muted-foreground truncate">
                       Cohort view · stats are aggregated across all selected students
@@ -526,12 +1015,17 @@ export default function TeacherSRDashboard() {
             </CardContent>
           </Card>
 
-          {/* Stats overview — aggregate across the cohort */}
+          {/* Stats overview - aggregate across the cohort */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card className={`border-t-2 ${statAccentClass("total", aggregateStats.total, aggregateStats.isPaused)}`}>
               <CardContent className="pt-4">
                 <div className="text-2xl font-bold">{aggregateStats.total}</div>
-                <div className="text-xs text-muted-foreground">Total cards</div>
+                <div
+                  className="text-xs text-muted-foreground"
+                  title="Every review card this cohort has on its schedule."
+                >
+                  Total review cards
+                </div>
               </CardContent>
             </Card>
             <Card className={`border-t-2 ${statAccentClass("overdue", aggregateStats.overdue, aggregateStats.isPaused)}`}>
@@ -539,7 +1033,12 @@ export default function TeacherSRDashboard() {
                 <div className={`text-2xl font-bold ${aggregateStats.overdue > 0 ? "text-rose-600" : "text-emerald-600"}`}>
                   {aggregateStats.overdue}
                 </div>
-                <div className="text-xs text-muted-foreground">Overdue now</div>
+                <div
+                  className="text-xs text-muted-foreground"
+                  title="Cards waiting for the student to review right now. The spaced-repetition algorithm decides when a card becomes due \u2014 not an assignment deadline."
+                >
+                  Due now
+                </div>
               </CardContent>
             </Card>
             <Card className={`border-t-2 ${statAccentClass("ef", aggregateStats.avgEF, aggregateStats.isPaused)}`}>
@@ -547,15 +1046,25 @@ export default function TeacherSRDashboard() {
                 <div className={`text-2xl font-bold ${retentionColor(parseFloat(String(aggregateStats.avgEF)))}`}>
                   {aggregateStats.avgEF}
                 </div>
-                <div className="text-xs text-muted-foreground">Avg EF (retention)</div>
+                <div
+                  className="text-xs text-muted-foreground"
+                  title="Average memory strength across the cohort. Range 1.3 (struggling) to 3.0 (rock-solid). Higher = stronger recall."
+                >
+                  Avg memory strength
+                </div>
               </CardContent>
             </Card>
             <Card className={`border-t-2 ${statAccentClass("status", 0, aggregateStats.isPaused)}`}>
               <CardContent className="pt-4">
                 <div className={`text-2xl font-bold ${aggregateStats.isPaused ? "text-amber-600" : "text-emerald-600"}`}>
-                  {aggregateStats.isPaused ? "PAUSED" : "Active"}
+                  {aggregateStats.isPaused ? "Paused" : "Active"}
                 </div>
-                <div className="text-xs text-muted-foreground">Cohort status</div>
+                <div
+                  className="text-xs text-muted-foreground"
+                  title="Whether spaced-repetition reviews are actively accumulating for this cohort. Toggle from the bulk controls or per-student cards."
+                >
+                  Reviews
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -564,11 +1073,13 @@ export default function TeacherSRDashboard() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
-                <Zap className="w-4 h-4 text-violet-600" /> Bulk Global Controls
+                <Zap className="w-4 h-4 text-violet-600" /> Bulk controls for the cohort
               </CardTitle>
               <CardDescription>
-                Affects every review item for the selected students in the selected courses
+                Every button below affects the selected students in the selected courses
                 ({selectedCourses.length} × {selectedStudents.length} = {selectedCourses.length * selectedStudents.length} pairs).
+                Hover any button to see exactly what it does. For per-student toggles,
+                expand a card in the breakdown below.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-3">
@@ -576,20 +1087,68 @@ export default function TeacherSRDashboard() {
                 variant="outline"
                 size="sm"
                 onClick={() => bulkToggleExamPrep(true)}
-                title="Enable Exam-Prep mode for every selected (course × student) pair"
+                title="Switch every selected student's review schedule into exam-prep mode. The schedule will re-sort so the hardest cards surface first \u2014 useful in the run-up to a test."
               >
-                <Zap className="w-4 h-4 mr-1" /> Enable Exam-Prep (all)
+                <Zap className="w-4 h-4 mr-1" /> Enable exam-prep (cohort)
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => bulkToggleExamPrep(false)}
-                title="Disable Exam-Prep mode for every selected (course × student) pair"
+                title="Turn exam-prep mode off for every selected student. Schedules return to their normal cadence."
               >
-                Disable Exam-Prep (all)
+                Disable exam-prep (cohort)
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => bulkToggleNotifications(true)}
+                title="Pause review-reminder notifications for every selected student. Reviews still accumulate, but no email/in-app pings are sent."
+              >
+                <BellOff className="w-4 h-4 mr-1 text-amber-500" /> Pause reminders (cohort)
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => bulkToggleNotifications(false)}
+                title="Resume review-reminder notifications for every selected student."
+              >
+                <Bell className="w-4 h-4 mr-1 text-emerald-500" /> Resume reminders (cohort)
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => bulkToggleSRDisabled(true)}
+                className="border-destructive/40 text-destructive hover:bg-destructive/5 hover:text-destructive"
+                title="Pause spaced repetition for the selected students. Reviews stop accumulating and reminders stop firing. Click again to resume."
+              >
+                <Ban className="w-4 h-4 mr-1" /> Pause spaced repetition
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => bulkToggleSRDisabled(false)}
+                title="Resume spaced repetition for the selected students. Their next course completion will seed a fresh review schedule."
+              >
+                <Power className="w-4 h-4 mr-1 text-emerald-500" /> Resume spaced repetition
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={openAssignDialog}
+                disabled={selectedCourses.length === 0 || selectedStudents.length === 0}
+                title={
+                  selectedCourses.length === 0
+                    ? "Pick a course first"
+                    : selectedStudents.length === 0
+                      ? "Select one or more students first"
+                      : "Pick a specific question to put on the selected students' next-review queue"
+                }
+              >
+                <Send className="w-4 h-4 mr-1" /> Add a review question
               </Button>
               <span className="text-xs text-muted-foreground self-center italic">
-                Per-student toggle is on each card below.
+                Per-student toggles (exam-prep, pause) are on each card below.
               </span>
             </CardContent>
           </Card>
@@ -602,7 +1161,7 @@ export default function TeacherSRDashboard() {
                 Per-student breakdown ({studentContextCards.length})
               </CardTitle>
               <CardDescription>
-                Click a row to expand and see the per-card list for that student.
+                Click a row to expand and see each review card for that student, with action buttons (make due now, send back, add a hint).
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -617,11 +1176,12 @@ export default function TeacherSRDashboard() {
                     <button
                       type="button"
                       onClick={() => toggleStudentExpanded(studentId)}
-                      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-sm text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="w-full px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-expanded={isExpanded}
                       aria-controls={`student-card-detail-${studentId}`}
                     >
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {/* TIER 1 — identity (always visible) */}
+                      <div className="flex items-center gap-3 min-w-0">
                         {isExpanded ? (
                           <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />
                         ) : (
@@ -631,35 +1191,45 @@ export default function TeacherSRDashboard() {
                           <GraduationCap className="w-3.5 h-3.5 text-violet-700" aria-hidden="true" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="font-medium text-foreground truncate">{display.name}</div>
+                          <div className="font-medium text-foreground truncate text-sm">{display.name}</div>
                           <div className="text-xs text-muted-foreground truncate">{display.email}</div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0 text-xs text-muted-foreground">
-                        <div className="flex flex-col items-end">
-                          <span className="font-medium text-foreground">{stats.total}</span>
-                          <span>cards</span>
-                        </div>
-                        {stats.overdue > 0 && (
-                          <div className="flex flex-col items-end">
-                            <span className="font-medium text-rose-600">{stats.overdue}</span>
-                            <span>overdue</span>
-                          </div>
-                        )}
-                        <div className="flex flex-col items-end">
-                          <span className={`font-medium ${retentionColor(parseFloat(String(stats.avgEF)))}`}>
-                            {stats.avgEF}
-                          </span>
-                          <span>EF</span>
-                        </div>
-                        {stats.isPaused && (
-                          <Badge variant="secondary" className="text-xs">Paused</Badge>
-                        )}
-                        {stats.isExamMode && (
-                          <Badge className="text-xs bg-indigo-600">Exam</Badge>
-                        )}
                         <PerStudentGlobalControls studentId={studentId} />
                       </div>
+
+                      {/* TIER 2 — stats + status badges (only renders if there's something to show).
+                          Skipped entirely when the student has 0 cards AND no badges — keeps
+                          the row quiet for empty schedules. */}
+                      {(stats.total > 0 || stats.isPaused || stats.isExamMode) && (
+                        <div className="mt-1.5 ml-7 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-1">
+                            <span className="font-medium text-foreground">{stats.total}</span>
+                            <span title="Total review cards this student has on their schedule.">cards</span>
+                          </div>
+                          {stats.overdue > 0 && (
+                            <div className="flex items-center gap-1">
+                              <span className="font-medium text-rose-600">{stats.overdue}</span>
+                              <span title="Cards due for review right now.">due now</span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-1">
+                            <span className={`font-medium ${retentionColor(parseFloat(String(stats.avgEF)))}`}>
+                              {stats.avgEF}
+                            </span>
+                            <span title="Memory strength. 1.3 (struggling) to 3.0 (rock-solid).">strength</span>
+                          </div>
+                          {stats.isPaused && (
+                            <Badge variant="secondary" className="text-[10px] py-0" title="This student's reminders are paused. Reviews are still accumulating.">
+                              Reminders paused
+                            </Badge>
+                          )}
+                          {stats.isExamMode && (
+                            <Badge className="text-[10px] py-0 bg-indigo-600" title="Hardest cards surface first.">
+                              Exam-prep
+                            </Badge>
+                          )}
+                        </div>
+                      )}
                     </button>
 
                     {isExpanded && (
@@ -669,21 +1239,29 @@ export default function TeacherSRDashboard() {
                         data-testid={`student-card-detail-${studentId}`}
                       >
                         {items.length === 0 ? (
-                          <p className="text-muted-foreground text-sm py-2">No review items. Complete a course first.</p>
+                          <p className="text-muted-foreground text-sm py-2">
+                            No review cards yet. Students get a review schedule after
+                            they finish a course - once they complete one, their cards
+                            will appear here.
+                          </p>
                         ) : (
                           items.map(item => (
                             <div
                               key={item._id}
-                              className={`flex items-center justify-between border rounded-lg px-3 py-2 text-sm gap-3 border-l-4 ${efStripeClass(item.EF)} bg-background hover:bg-muted/30 motion-safe:transition-colors`}
+                              className={cn(
+                                "rounded-lg border border-border bg-background hover:bg-muted/30 motion-safe:transition-colors px-3 py-2.5 space-y-1.5",
+                                "border-l-4",
+                                efStripeClass(item.EF),
+                              )}
                             >
-                              {/* Left: metadata */}
-                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                              {/* TIER 1 — body line: course, question preview, memory strength */}
+                              <div className="flex items-center gap-2 min-w-0">
                                 <Badge variant="outline" className="text-xs shrink-0" title={item.course_id}>
                                   {courseDisplay(item.course_id).name}
                                 </Badge>
                                 {questionSummaryById.get(item.question_id) ? (
                                   <span
-                                    className="text-xs text-foreground/80 truncate max-w-64 shrink"
+                                    className="text-sm text-foreground/90 truncate flex-1 min-w-0"
                                     title={questionSummaryById.get(item.question_id)?.body}
                                   >
                                     {questionSummaryById.get(item.question_id)?.body}
@@ -696,68 +1274,94 @@ export default function TeacherSRDashboard() {
                                     Q:{item.question_id.slice(0, 8)}
                                   </span>
                                 )}
-                                <div className="flex items-center gap-1.5">
-                                  <span className={`text-xs font-bold ${retentionColor(item.EF)}`}>
-                                    EF {item.EF.toFixed(2)}
-                                  </span>
-                                  <span className="text-xs text-muted-foreground">{item.interval_days}d</span>
-                                </div>
-                                {item.is_paused && (
-                                  <Badge variant="secondary" className="text-xs shrink-0">Paused</Badge>
-                                )}
-                                {item.exam_prep_mode && (
-                                  <Badge className="text-xs bg-indigo-600 shrink-0">Exam</Badge>
-                                )}
-                                {item.remediation_hint && (
-                                  <Badge variant="default" className="text-xs bg-amber-600 shrink-0" title={item.remediation_hint}>
-                                    Hint
-                                  </Badge>
-                                )}
-                                <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
-                                  <Clock className="w-3 h-3" />
-                                  <span className="whitespace-nowrap">
-                                    {new Date(item.next_review_at).toLocaleString()}
-                                  </span>
-                                </div>
+                                <span
+                                  className={cn("text-sm font-bold shrink-0 tabular-nums", retentionColor(item.EF))}
+                                  title="Memory strength. 1.3 (struggling) to 3.0 (rock-solid). Higher = stronger recall."
+                                >
+                                  {item.EF.toFixed(2)}
+                                </span>
                               </div>
 
-                              {/* Right: per-card actions */}
-                              <div className="flex items-center gap-1 shrink-0">
-                                {item.remediation_hint && (
-                                  <span className="text-xs text-amber-600 max-w-32 truncate" title={item.remediation_hint}>
-                                    💡 {item.remediation_hint}
+                              {/* TIER 2 — status row: badges + schedule. Skipped when empty
+                                  (no badges + no schedule relevant to surface). */}
+                              {(item.is_paused || item.exam_prep_mode || item.remediation_hint) && (
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                  {item.is_paused && (
+                                    <Badge variant="secondary" className="text-[10px] py-0" title="Reminders for this card are paused.">
+                                      Paused
+                                    </Badge>
+                                  )}
+                                  {item.exam_prep_mode && (
+                                    <Badge className="text-[10px] py-0 bg-indigo-600" title="Hardest-first sort.">
+                                      Exam-prep
+                                    </Badge>
+                                  )}
+                                  {/* HintPopover replaces the old inline hint preview + the
+                                      amber "Hint set" badge. Click the chip to read; click Edit
+                                      inside the bubble to change. */}
+                                  <HintPopover
+                                    hint={item.remediation_hint ?? null}
+                                    questionIdShort={item.question_id.slice(-6)}
+                                    onEdit={() => openHintEditor(studentId, item.question_id, item.remediation_hint ?? null)}
+                                  />
+                                </div>
+                              )}
+
+                              {/* TIER 3 — schedule + actions. Schedule on left, actions
+                                  right-aligned. Both render on every card (so the teacher
+                                  always sees when and what they can do). */}
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+                                  <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                  <span
+                                    className="whitespace-nowrap truncate"
+                                    title={`When the algorithm thinks this card is next due. Interval: ${item.interval_days}d.`}
+                                  >
+                                    Due {formatRelativeWhen(item.next_review_at)}
                                   </span>
-                                )}
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-7 text-xs"
-                                  onClick={() => handleBoost(studentId, item.question_id)}
-                                  disabled={actionLoading === `${studentId}-${item.question_id}-boost`}
-                                  title="Boost: make due immediately"
-                                >
-                                  {actionLoading === `${studentId}-${item.question_id}-boost` ? (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : (
-                                    <Zap className="w-3 h-3 text-orange-500" />
-                                  )}
-                                  <span className="ml-1">Boost</span>
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-7 text-xs text-destructive"
-                                  onClick={() => handleReset(studentId, item.question_id)}
-                                  disabled={actionLoading === `${studentId}-${item.question_id}-reset`}
-                                  title="Reset: delete this card, student must relearn"
-                                >
-                                  {actionLoading === `${studentId}-${item.question_id}-reset` ? (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : (
-                                    <RotateCcw className="w-3 h-3" />
-                                  )}
-                                  <span className="ml-1">Reset</span>
-                                </Button>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-xs"
+                                    onClick={() => handleBoost(studentId, item.question_id)}
+                                    disabled={actionLoading === `${studentId}-${item.question_id}-boost`}
+                                    title="Make this card due for review right now. Useful for a hard concept the student needs to see again."
+                                  >
+                                    {actionLoading === `${studentId}-${item.question_id}-boost` ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <Zap className="w-3 h-3 text-orange-500" />
+                                    )}
+                                    <span className="ml-1">Make due now</span>
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-xs text-destructive"
+                                    onClick={() => requestHandleReset(studentId, item.question_id)}
+                                    disabled={actionLoading === `${studentId}-${item.question_id}-reset`}
+                                    title="Remove this card from the student's schedule. They'll have to relearn it on the next course completion."
+                                  >
+                                    {actionLoading === `${studentId}-${item.question_id}-reset` ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <RotateCcw className="w-3 h-3" />
+                                    )}
+                                    <span className="ml-1">Send back</span>
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 text-xs text-amber-600"
+                                    onClick={() => openHintEditor(studentId, item.question_id, item.remediation_hint ?? null)}
+                                    title={item.remediation_hint ? `Edit hint: ${item.remediation_hint}` : "Write a short note your student will see next time they review this question"}
+                                  >
+                                    <MessageSquareText className="w-3 h-3" />
+                                    <span className="ml-1">{item.remediation_hint ? "Edit hint" : "Add hint"}</span>
+                                  </Button>
+                                </div>
                               </div>
                             </div>
                           ))
@@ -771,6 +1375,407 @@ export default function TeacherSRDashboard() {
           </Card>
         </>
       )}
+
+      {/* Per-card Set Hint Dialog (ported 2026-08-09 from
+          ReviewScheduler). One dialog at the page root, keyed on the
+          current `hintEditor` state - only opens when the teacher
+          clicks "Hint"/"Edit Hint" on a per-card row. Empty draft
+          saves as `null` (clears the hint), which matches the
+          backend's contract for "no hint". */}
+      <Dialog
+        open={hintEditor !== null}
+        onOpenChange={(open) => {
+          if (!open) closeHintEditor()
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessageSquareText className="h-4 w-4 text-amber-600" />
+              {hintEditor?.existingHint ? "Edit hint" : "Add hint"}
+            </DialogTitle>
+            <DialogDescription>
+              Write a short note your student will see the next time they review this
+              question. Leave blank to clear an existing hint.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Input
+              value={hintEditor?.draft ?? ""}
+              onChange={(e) =>
+                setHintEditor((prev) => (prev ? { ...prev, draft: e.target.value } : prev))
+              }
+              placeholder="e.g. Remember: focus on the verb tense, not the subject."
+              className="h-11"
+              maxLength={280}
+              autoFocus
+            />
+            {/* F5 audit fix (2026-08-11): render a live preview of what the
+                student will see below the input. The teacher's previous
+                experience was typing into a void. Now they see the
+                student-side framing — same Lightbulb icon, same sky-blue
+                card, same "Need a hint?" label (mirroring ReviewSession.tsx
+                lines 1723-1746) — so they can write appropriately
+                student-facing language.
+
+                Post-answer-only behaviour note: the student only sees the
+                hint AFTER they answer incorrectly (per ReviewSession.tsx
+                spoiler-avoidance rule, bug-1 fix 2026-08-01). The preview
+                below shows the visual rendering; the helper text flags
+                this so the teacher understands the timing. */}
+            {hintEditor && (hintEditor.draft.trim() || hintEditor.existingHint) && (
+              <div className="space-y-1.5 pt-1">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Student preview
+                </div>
+                <div
+                  role="note"
+                  aria-label="Teacher-set remediation hint preview"
+                  data-testid="hint-student-preview"
+                  className="rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900"
+                >
+                  <div className="flex items-start gap-2">
+                    <Lightbulb
+                      className="h-4 w-4 mt-0.5 flex-shrink-0 text-sky-600"
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <p className="font-medium mb-1">Need a hint?</p>
+                      <p className="text-sky-800">
+                        {(hintEditor.draft.trim() || hintEditor.existingHint || '').slice(0, 280)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Shown to the student only after they answer incorrectly — not on a correct first try.
+                </p>
+              </div>
+            )}
+            {hintEditor?.existingHint && (
+              <div className="text-xs text-muted-foreground">
+                Current hint: <span className="italic">{hintEditor.existingHint}</span>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={closeHintEditor}>
+              Cancel
+            </Button>
+            <Button
+              onClick={saveHint}
+              disabled={hintMutation.isPending}
+            >
+              {hintMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...
+                </>
+              ) : (
+                <>
+                  <MessageSquareText className="mr-2 h-4 w-4" /> Save Hint
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual Review Assignment Dialog (ported 2026-08-09 from
+          ReviewScheduler). Lives at the page root so it overlays the
+          entire page regardless of which Card the user triggered
+          from. Uses `primaryCourseId` (the first selected course) for
+          the assignable-questions fetch - see openAssignDialog() for
+          the rationale. */}
+      <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-4 w-4 text-primary" />
+              Add a review question
+            </DialogTitle>
+            <DialogDescription>
+              {assignForStudents.length === 1 ? (
+                <>
+                  Pick a question to put on{' '}
+                  <span className="font-medium text-foreground">
+                    {studentDisplay(assignForStudents[0]).name}
+                  </span>
+                  &apos;s next-review queue. They&apos;ll see it the next time they open
+                  the review screen.
+                </>
+              ) : assignForStudents.length > 1 ? (
+                <>
+                  Pick a question to put on the next-review queue for{' '}
+                  <span className="font-medium text-foreground">
+                    {assignForStudents.length} students
+                  </span>
+                  . Uncheck any you want to skip.
+                </>
+              ) : (
+                'Pick a question to assign.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Student checkbox strip (multi-student case). Pre-fills with
+              the cohort selection; the teacher can drop any before
+              submitting. Renders only when there are 2+ students
+              (single-student case is already conveyed in the
+              description above). */}
+          {assignForStudents.length > 1 && (
+            <div
+              className="rounded-md border border-border bg-muted/30 p-3 space-y-1.5"
+              data-testid="assign-student-strip"
+            >
+              {/* F4 audit fix (2026-08-11): header now carries a "Clear"
+                  link so a teacher can wipe all recipients in one click
+                  instead of unchecking each row. Saves tedious clicking
+                  for cohorts of 20+ students. */}
+              <div className="flex items-center justify-between pb-1">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Recipients ({assignForStudents.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAssignForStudents([])}
+                  className="text-xs font-medium text-primary underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+                  aria-label="Remove all recipients"
+                  data-testid="assign-clear-all-recipients"
+                >
+                  Clear
+                </button>
+              </div>
+              <div className="max-h-[140px] overflow-y-auto space-y-1 pr-1">
+                {assignForStudents.map((studentId) => (
+                  <label
+                    key={studentId}
+                    className="flex items-center gap-2 rounded-sm px-2 py-1 cursor-pointer hover:bg-background/60"
+                  >
+                    <Checkbox
+                      checked
+                      onCheckedChange={() => toggleAssignStudent(studentId)}
+                      aria-label={`Remove ${studentDisplay(studentId).name} from assignment`}
+                    />
+                    <span className="text-sm">
+                      {studentDisplay(studentId).name}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {isLoadingAssignable ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-6">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading question
+                catalogue...
+              </div>
+            ) : (assignableData?.questions ?? []).length === 0 ? (
+              <div className="text-sm text-muted-foreground py-6 text-center border border-dashed rounded-md">
+                No questions found in this course's banks. Add banks to the course first.
+              </div>
+            ) : (
+              <>
+                <div className="text-xs text-muted-foreground flex items-center gap-1.5 pb-1">
+                  <Library className="h-3.5 w-3.5" />
+                  {assignableData?.questions.filter((q) => q.fromCourse).length ?? 0}{' '}
+                  from this course ·{' '}
+                  {assignableData?.questions.filter((q) => !q.fromCourse).length ?? 0}{' '}
+                  cross-bank
+                </div>
+                <div className="space-y-1.5 max-h-[40vh] overflow-y-auto pr-1">
+                  {assignableData?.questions.map((q) => {
+                    const isSelected = selectedQuestionId === q.id
+                    return (
+                      <button
+                        key={q.id}
+                        type="button"
+                        onClick={() => setSelectedQuestionId(q.id)}
+                        className={
+                          'w-full text-left rounded-md border p-3 transition-colors ' +
+                          (isSelected
+                            ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+                            : 'border-border hover:bg-muted/40')
+                        }
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="text-sm font-medium leading-snug">
+                            {q.body}
+                          </div>
+                          {q.fromCourse ? (
+                            <span className="shrink-0 text-[10px] uppercase tracking-wide font-medium rounded-full bg-primary/10 text-primary px-2 py-0.5">
+                              Course
+                            </span>
+                          ) : (
+                            <span className="shrink-0 text-[10px] uppercase tracking-wide font-medium rounded-full bg-muted text-muted-foreground px-2 py-0.5">
+                              Cross-bank
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1.5 text-xs text-muted-foreground">
+                          from{' '}
+                          <span className="italic">
+                            {q.bankTitles.filter(Boolean).join(', ') || 'Unknown bank'}
+                          </span>{' '}
+                          · <span className="font-mono">{q.type}</span>
+                        </div>
+                        {q.hint && (
+                          <div className="mt-1.5 text-xs text-muted-foreground italic">
+                            Hint: {q.hint}
+                          </div>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAssignDialogOpen(false)
+                setSelectedQuestionId('')
+                setAssignForStudents([])
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={submitAssign}
+              disabled={!selectedQuestionId || assignForStudents.length === 0 || assignMutation.isPending}
+            >
+              {assignMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Adding…
+                </>
+              ) : (
+                <>
+                  <Send className="mr-2 h-4 w-4" />{' '}
+                  {assignForStudents.length > 1
+                    ? `Add to ${assignForStudents.length} students`
+                    : 'Assign'}
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Bulk-action confirm dialog (C4 audit fix, 2026-08-11) ──
+          Replaces 3 native `window.confirm()` calls with one styled
+          shadcn dialog. Title + description + button labels are
+          derived from `pendingBulkAction.kind` so the same dialog
+          handles notifications, SR-disabled, and exam-prep. The
+          dialog only opens above BULK_CONFIRM_THRESHOLD; below that
+          the bulk action runs silently. */}
+      <ConfirmDialog
+        open={pendingBulkAction !== null}
+        onOpenChange={(open) => {
+          if (!open && !bulkActionPending) setPendingBulkAction(null)
+        }}
+        pending={bulkActionPending}
+        variant="destructive"
+        title={bulkActionTitle(pendingBulkAction)}
+        description={bulkActionDescription(pendingBulkAction)}
+        confirmLabel={bulkActionConfirmLabel(pendingBulkAction)}
+        onConfirm={async () => {
+          if (pendingBulkAction) await pendingBulkAction.run()
+        }}
+      />
+
+      {/* ── Per-card "Send back" confirm dialog (C4 audit fix, 2026-08-11) ──
+          Replaces the native `confirm()` call for the per-card reset
+          action. Single shared dialog, opened via `requestHandleReset`. */}
+      <ConfirmDialog
+        open={pendingReset !== null}
+        onOpenChange={(open) => {
+          if (!open && !resetPending) setPendingReset(null)
+        }}
+        pending={resetPending}
+        variant="destructive"
+        title="Send this card back?"
+        description={
+          <p>
+            The student will have to relearn this card after their next course
+            completion. Their current memory-strength score for it will be wiped.
+            This can&rsquo;t be undone — you&rsquo;d need to manually assign the
+            card again to bring it back.
+          </p>
+        }
+        confirmLabel="Send back"
+        onConfirm={async () => {
+          if (pendingReset) {
+            const { studentId, questionId } = pendingReset
+            await runHandleReset(studentId, questionId)
+          }
+        }}
+      />
     </div>
   )
+
+  // Helper functions (C4 audit fix, 2026-08-11): derive the title,
+  // description, and confirm-button label for the bulk-confirm dialog
+  // from the pending action's kind. Keeping them as local helpers
+  // avoids a giant conditional inside the JSX.
+  function bulkActionTitle(action: typeof pendingBulkAction): string {
+    if (!action) return ""
+    switch (action.kind) {
+      case "notifications":
+        return action.enabled ? "Pause review reminders?" : "Resume review reminders?"
+      case "sr_disabled":
+        return action.enabled ? "Pause spaced repetition?" : "Resume spaced repetition?"
+      case "exam_prep":
+        return action.enabled ? "Enable exam-prep mode?" : "Disable exam-prep mode?"
+    }
+  }
+  function bulkActionDescription(action: typeof pendingBulkAction): ReactNode {
+    if (!action) return null
+    const { courses, students, pairs } = action.summary
+    switch (action.kind) {
+      case "notifications":
+        return (
+          <p>
+            You&rsquo;re about to {action.enabled ? "pause" : "resume"} review
+            reminders for <strong>{pairs}</strong> (course &times; student) pair{pairs === 1 ? "" : "s"}
+            {" "}(<strong>{courses}</strong> course{courses === 1 ? "" : "s"} &times;{" "}
+            <strong>{students}</strong> student{students === 1 ? "" : "s"}).
+            {!action.enabled && " Students will start getting review notifications again."}
+          </p>
+        )
+      case "sr_disabled":
+        return (
+          <p>
+            You&rsquo;re about to {action.enabled ? "pause" : "resume"} spaced
+            repetition for <strong>{students}</strong> student{students === 1 ? "" : "s"}.
+            {!action.enabled && " Their reviews and reminders will resume immediately."}
+          </p>
+        )
+      case "exam_prep":
+        return (
+          <p>
+            You&rsquo;re about to {action.enabled ? "enable" : "disable"} exam-prep
+            mode for <strong>{pairs}</strong> (course &times; student) pair{pairs === 1 ? "" : "s"}
+            {" "}(<strong>{courses}</strong> course{courses === 1 ? "" : "s"} &times;{" "}
+            <strong>{students}</strong> student{students === 1 ? "" : "s"}).
+          </p>
+        )
+    }
+  }
+  function bulkActionConfirmLabel(action: typeof pendingBulkAction): string {
+    if (!action) return "Confirm"
+    switch (action.kind) {
+      case "notifications":
+        return action.enabled ? "Pause reminders" : "Resume reminders"
+      case "sr_disabled":
+        return action.enabled ? "Pause" : "Resume"
+      case "exam_prep":
+        return action.enabled ? "Enable" : "Disable"
+    }
+  }
 }

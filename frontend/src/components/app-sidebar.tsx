@@ -86,14 +86,15 @@ export function AppSidebar() {
         icon: LifeBuoy,
       },
       {
-        title: "Review Scheduler",
-        url: "/teacher/spaced-repetition",
-        icon: Brain,
-      },
-      {
         title: "SR Dashboard",
         url: "/teacher/spaced-repetition-dashboard",
         icon: Brain,
+        // G3 audit fix (2026-08-11): the visible label "SR Dashboard"
+        // is cryptic. New mentors don't know what SR means or what the
+        // page does. Tooltip explains on hover (sidebar collapses to
+        // icon-only mode on narrow viewports, where this is most
+        // visible).
+        tooltip: "See each student's review schedule, bulk-edit reminders, and assign specific reviews.",
       },
       // {
       //   title: "Notifications",

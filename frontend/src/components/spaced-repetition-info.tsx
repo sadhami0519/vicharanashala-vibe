@@ -16,6 +16,29 @@
  *     intro + 1 sentence per role section) so it's not a lecture.
  *
  * Update freely without touching InfoPopover.tsx.
+ *
+ * 2026-08-09: bulk rename pass for the new-mentor UX audit. Aligned the
+ *   modal copy with the dashboard renames:
+ *     - "EF" / "easiness factor" -> "memory strength" (EF kept as canonical
+ *       abbreviation in this file because it appears in the formula and the
+ *       table headers, where technical readers expect it).
+ *     - "Overdue" -> "Due now" (matches the new stat tile label; keeps the
+ *       "algorithm-decided, not deadline-decided" framing).
+ *     - "Boost" -> "Make due now" / "Make a card due now" (matches the
+ *       per-card button label).
+ *     - "Reset" -> "Send back" / "Send a card back" (matches the per-card
+ *       button label; clearer about what actually happens).
+ *     - "Disable SR" / "Disable spaced repetition" -> "Pause spaced
+ *       repetition" (matches the bulk + per-row labels).
+ *     - "Assign a review" -> "Add a review question" (matches the bulk
+ *       button label; clearer about what the user does).
+ *     - For-teachers footer now explicitly cross-references the cohort
+ *       stat tile (1.3-3.0 scale) vs the student retention dashboard
+ *       (0-100% scale), so a mentor reading the modal can map the math
+ *       back to either side of the app.
+ *     - Question-bank terminology introduced in the Assign section so
+ *       the "this course's banks" / "cross-bank" entries in the Assign
+ *       dialog catalogue aren't unexplained.
  */
 
 export const SPACED_REPETITION_INFO_TITLE = "How Spaced Repetition Works";
@@ -192,11 +215,12 @@ function MemoryStrengthExplainer() {
       </p>
       <p className="mt-1 text-xs text-slate-600">
         <span className="font-medium text-slate-700">For teachers:</span>{" "}
-        the cohort table&rsquo;s <em>retention health</em> column is that
-        same average per student. A row at 1.5 EF / 40% means the student
-        is struggling with most of that course&rsquo;s cards; a row at 2.7
-        EF / 90% means they&rsquo;re tracking well. The colour coding in
-        the table follows the ranges above.
+        the cohort stat tile on the Teacher review controls page shows that
+        same average per student &mdash; but on the raw 1.3&ndash;3.0 scale
+        (a row reading <span className="font-mono">1.50</span> means the
+        student is struggling with most of that course&rsquo;s cards;{" "}
+        <span className="font-mono">2.70</span> means they&rsquo;re tracking
+        well). The colour coding in the tile follows the ranges above.
       </p>
     </section>
   );
@@ -222,9 +246,10 @@ function StudentSection() {
           it's due again tomorrow.
         </li>
         <li>
-          <span className="font-medium">Your dashboard shows what's due.</span>{" "}
-          "Overdue" = waiting for you now. "Due soon" = coming up. The
-          retention % tells you how well you're tracking overall.
+          <span className="font-medium">Your dashboard shows what&rsquo;s due.</span>{" "}
+          &ldquo;Due now&rdquo; = waiting for you right now (the algorithm
+          decided, not a deadline). &ldquo;Due soon&rdquo; = coming up. The
+          retention % tells you how well you&rsquo;re tracking overall.
         </li>
         <li>
           <span className="font-medium">Your teacher has controls</span> over
@@ -240,17 +265,21 @@ function StudentSection() {
               your next session on the concepts you're weakest at first.
             </li>
             <li>
-              <span className="font-medium">Boost a card</span> &mdash;
+              <span className="font-medium">Make a card due now</span> &mdash;
               re-surface a question your teacher thinks you should re-attempt
               now, even if you marked it <em>Got it</em> last time.
             </li>
             <li>
-              <span className="font-medium">Add a hint</span> &mdash; attach a
-              personal note to a card you keep struggling with.
+              <span className="font-medium">Add a hint</span> &mdash; your
+              teacher can attach a short note to a card you keep struggling
+              with. The hint appears in an amber box above your answer
+              options the next time you review the question.
             </li>
             <li>
-              <span className="font-medium">Reset a card</span> &mdash; wipe
-              a card back to its starting state if the data has gone bad.
+              <span className="font-medium">Send a card back</span> &mdash;
+              your teacher can remove a card from your schedule if the data
+              has gone bad. You&rsquo;ll have to relearn it on the next course
+              completion.
             </li>
           </ul>
         </li>
@@ -298,36 +327,39 @@ function TeacherSection() {
           <ul className="list-disc space-y-1 pl-5 pt-1">
             <li>Toggle reminders on/off</li>
             <li>
-              Toggle exam-prep mode (re-sorts that student's queue: overdue
-              first, then weakest within the overdue bucket)
+              Toggle exam-prep mode (re-sorts that student&rsquo;s queue: due
+              now first, then weakest within the due-now bucket)
             </li>
             <li>
-              Open the action menu &rarr;{" "}
-              <span className="font-medium">Boost</span> /{" "}
-              <span className="font-medium">Reset</span> /{" "}
+              Expand the row &rarr;{" "}
+              <span className="font-medium">Make due now</span> /{" "}
+              <span className="font-medium">Send back</span> /{" "}
               <span className="font-medium">Add hint</span>
             </li>
           </ul>
         </li>
         <li>
-          <span className="font-medium">Bulk actions</span> apply to every
+          <span className="font-medium">Bulk controls</span> apply to every
           selected student at once &mdash; useful for announcing a review
-          break to the whole class.
+          break to the whole class, flipping everyone into exam-prep mode
+          before a test, or pausing spaced repetition for the cohort.
         </li>
         <li>
-          <span className="font-medium">Disable SR for a student</span> turns
-          off spaced-repetition entirely for that account &mdash; reviews
-          stop accumulating and reminders stop firing. The student still sees
-          the navigation entry; landing on it shows a message that their
-          teacher has paused it. Re-enable at any time.
+          <span className="font-medium">Pause spaced repetition for a student</span>{" "}
+          turns reviews off entirely for that account &mdash; reviews stop
+          accumulating and reminders stop firing. The student still sees the
+          navigation entry; landing on it shows a message that their teacher
+          has paused it. Resume at any time.
         </li>
         <li>
-          <span className="font-medium">Assign a review</span> puts a
-          specific question on a single student's next-review queue. Pick a
-          student, then choose from the question catalogue &mdash; entries
-          from this course's banks appear first, followed by cross-bank
-          entries. If a question is already in the student's queue, the
-          dialog offers to <em>boost</em> it instead (no duplicate).
+          <span className="font-medium">Add a review question</span> puts a
+          specific question on a single student&rsquo;s next-review queue.
+          Pick a student, then choose from the question catalogue &mdash;
+          questions are organised into <em>question banks</em> (one bank per
+          course module), so you&rsquo;ll see this course&rsquo;s banks first
+          and other courses&rsquo; banks after. If a question is already in
+          the student&rsquo;s queue, the dialog tells you to use{" "}
+          <em>Make due now</em> on that card&rsquo;s row instead (no duplicate).
         </li>
       </ul>
     </div>

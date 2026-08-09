@@ -1,11 +1,12 @@
 import { useState, useMemo } from 'react';
-import { BookOpen, Search, Users, X, HelpCircle } from 'lucide-react';
+import { BookOpen, Search, Users, X } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
+import { InfoPopover } from '@/components/InfoPopover';
 import { cn } from '@/utils/utils';
 import type { TeacherCourseSummary } from '@/types/spaced-repetition.types';
 
@@ -29,8 +30,9 @@ export interface CourseMultiSelectCardProps {
  * at once (e.g. "show me retention across all of Mr X's courses").
  *
  * Replaces the single-select CourseSelectCard for the teacher dashboard
- * page where aggregation is the goal. ReviewScheduler keeps using
- * CourseSelectCard because its controls target one course at a time.
+ * page where aggregation is the goal. (Note: the single-student
+ * ReviewScheduler view that previously used CourseSelectCard was
+ * retired on 2026-08-09 in favour of TeacherSRDashboard.)
  *
  * Selection state is fully controlled by the parent. Order of ids in
  * `selectedCourseIds` is the order the user clicked them — the parent
@@ -87,19 +89,31 @@ export function CourseMultiSelectCard({
               {selectedCourseIds.length}/{list.length}
             </span>
           )}
-          {/* ⓘ help (added 2026-08-05, Phase 3): mirrors the student-list
-              help icon pattern. Single short title= tooltip is intentional —
-              the page-level InfoPopover covers the broader "what is SR"
-              question; this chevron is picker-specific. */}
-          <button
-            type="button"
-            aria-label="Help about the courses picker"
-            title="Courses picker — multi-select for cohort views"
-            className="ml-0.5 p-0.5 rounded text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            data-testid="course-multi-help-button"
+          {/* ⓘ picker-specific help (updated 2026-08-08): converted from a
+              native `title=` tooltip to the proper InfoPopover dialog so
+              teachers get the same rich-help experience as the student
+              retention dashboard. Body is scoped to this picker — the
+              page-level InfoPopover still covers the broader "what is SR"
+              question. */}
+          <InfoPopover
+            title="About the courses picker"
+            ariaLabel="Help about the courses picker"
+            triggerClassName="ml-0.5 h-5 w-5"
           >
-            <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
+            <p>
+              Check the courses you want to look at. You can pick just one, or
+              tick several boxes to compare them side by side.
+            </p>
+            <p>
+              <strong>Main course:</strong> the first course you tick becomes
+              the &ldquo;main&rdquo; one. It decides which students show up in
+              the list below, and which questions the action buttons work on.
+            </p>
+            <p>
+              <strong>Search:</strong> type part of a course name to find it
+              quickly. Useful when you teach a lot of classes.
+            </p>
+          </InfoPopover>
         </div>
         {!isLoading && list.length > 0 && (
           <button

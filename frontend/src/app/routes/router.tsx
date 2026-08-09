@@ -78,7 +78,6 @@ import { StudentHpGuard } from '@/components/hp-system/StudentHpGuard'
 import NotificationsPage from '@/app/pages/shared/NotificationsPage'
 import ReviewSession from '@/app/pages/student/ReviewSession'
 import RetentionDashboard from '@/app/pages/student/RetentionDashboard'
-import ReviewScheduler from "@/app/pages/teacher/ReviewScheduler";
 import SupportDashboard from '@/app/pages/teacher/support-dashboard'
 import TeacherSRDashboard from "@/app/pages/teacher/TeacherSRDashboard";
 
@@ -752,11 +751,6 @@ export const selectRoleRoute = new Route({
   component: SelectRolePage
 })
 
-const teacherReviewSchedulerRoute = new Route({
-  getParentRoute: () => teacherLayoutRoute,
-  path: '/spaced-repetition', // This matches the URL you set in AppSidebar
-  component: ReviewScheduler,
-});
 // Sharing a video that is not in a course — no course picker, so it belongs
 // beside the course builder rather than inside a course.
 const teacherShareVideoRoute = new Route({
@@ -773,12 +767,12 @@ export const shareLinkRoute = new Route({
   component: ShareLinkLanding
 })
 
-// Phase 3 (2026-08-05): NEW route. TeacherSRDashboard is the cohort
+// Phase 3 (2026-08-09): /spaced-repetition (single-student
+// ReviewScheduler) retired. TeacherSRDashboard is the cohort
 // view (multi-select courses + multi-select students, aggregate
-// stats, per-student drill-down) that the Phase 3 work landed on.
-// Sibling to the single-student ReviewScheduler — no behavioural
-// change to /spaced-repetition. Path is flat so future route
-// additions don't accumulate slashes.
+// stats, per-student drill-down) that the Phase 3 work landed on,
+// and it's the only teacher SR surface now. Path is flat so future
+// route additions don't accumulate slashes.
 const teacherSRDashboardRoute = new Route({
   getParentRoute: () => teacherLayoutRoute,
   path: '/spaced-repetition-dashboard',
@@ -829,7 +823,6 @@ const routeTree = rootRoute.addChildren([
     teacherHpSystemCohortsRoute,
     teacherHpSystemDashboardRoute,
     teacherCreateHpActivityRoute,
-    teacherReviewSchedulerRoute,
     teacherSRDashboardRoute,
     teacherStudentLedgerRoute,
     teacherStudentSubmissionsRoute,

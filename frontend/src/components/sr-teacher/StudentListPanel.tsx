@@ -1,10 +1,11 @@
 import { useState, useMemo, type ReactNode } from 'react';
-import { Mail, Search, User, Users, X, HelpCircle } from 'lucide-react';
+import { Mail, Search, User, Users, X } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
+import { InfoPopover } from '@/components/InfoPopover';
 import type { EnrichedStudent } from '@/types/spaced-repetition.types';
 import { cn } from '@/utils/utils';
 
@@ -35,6 +36,15 @@ export interface StudentListPanelProps {
    * as a flex row, left-aligned. Defaults to nothing (no-op).
    */
   headerSlot?: ReactNode;
+  /**
+   * Optional CTA rendered inside the empty-state when there are no
+   * students with a review schedule for the selected course (added
+   * 2026-08-11 for audit G4). When provided, the empty state shows a
+   * short explanation + a button so the teacher has a next step
+   * instead of staring at a wall. The teacher dashboard passes
+   * "Pick a different course" which scrolls back to the course picker.
+   */
+  emptyStateCta?: StudentListPanelEmptyStateCta;
 }
 
 /**
@@ -57,10 +67,26 @@ export interface StudentListPanelProps {
  *
  * Empty states: four distinct cases
  *   - `students === undefined` → loading skeleton
- *   - `students.length === 0`  → "No students have a review schedule for this course yet."
+ *   - `students.length === 0`  → "No students have a review schedule yet."
+ *      with an explanation + CTA (see G4 audit fix, 2026-08-11)
  *   - filtered list is empty   → "No students match \"<query>\"."
  *   - otherwise                → render the filtered list
+ *
+ * **G4 CTA copy (added 2026-08-11):** the empty state used to be a bare
+ * sentence. New mentors had no idea what a "review schedule" was or why
+ * students weren't there. Added: explanation ("Students get review
+ * schedules after completing a course") + actionable CTA that scrolls
+ * the page back up to the course picker where the teacher can pick a
+ * different course if they have the wrong one selected.
  */
+/** Empty-state CTA behaviour (added 2026-08-11 for audit G4). */
+export interface StudentListPanelEmptyStateCta {
+  /** Short label rendered on the CTA button, e.g. "Pick a different course". */
+  label: string;
+  /** Called when the teacher clicks the CTA. */
+  onClick: () => void;
+}
+
 export function StudentListPanel({
   students,
   selectedStudentIds,
@@ -70,6 +96,7 @@ export function StudentListPanel({
   className,
   scrollHeightClass = 'h-[260px]',
   headerSlot,
+  emptyStateCta,
 }: StudentListPanelProps) {
   const isLoading = students === undefined;
   const [query, setQuery] = useState('');
@@ -108,22 +135,32 @@ export function StudentListPanel({
               {selectedStudentIds.length}/{list.length}
             </span>
           )}
-          {/* ⓘ help (added 2026-08-05, Phase 3): short, picker-specific copy.
-              Same pattern as the page-level InfoPopover but inlined as a
-              Self-contained title+body popover so this panel doesn't have
-              to import the long SpacedRepetitionInfoBody module. The
-              picker is small enough that a single 3-line tooltip is the
-              right scope. The page-level popover still covers the bigger
-              "what is spaced repetition" question. */}
-          <button
-            type="button"
-            aria-label="Help about the enrolled students picker"
-            title="Enrolled students picker"
-            className="ml-0.5 p-0.5 rounded text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            data-testid="student-list-help-button"
+          {/* ⓘ picker-specific help (updated 2026-08-08): converted from a
+              native `title=` tooltip to the proper InfoPopover dialog so
+              teachers get the same rich-help experience as the student
+              retention dashboard. Body is scoped to this picker — the
+              page-level InfoPopover still covers the broader "what is SR"
+              question. */}
+          <InfoPopover
+            title="About the enrolled students picker"
+            ariaLabel="Help about the enrolled students picker"
+            triggerClassName="ml-0.5 h-5 w-5"
           >
-            <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
+            <p>
+              Tick the students you want to check on. Pick one or many — the
+              choice is yours.
+            </p>
+            <p>
+              <strong>Who shows up here:</strong> only students from the
+              &ldquo;main&rdquo; course you ticked above. Change the main
+              course and this list updates on its own.
+            </p>
+            <p>
+              <strong>Search:</strong> type a name or an email to find someone.
+              Your earlier picks stay ticked even after you search, so feel
+              free to filter and pick a few in a row.
+            </p>
+          </InfoPopover>
         </div>
         {!isLoading && list.length > 0 && !hideSelectAll && (
           <button
@@ -185,9 +222,31 @@ export function StudentListPanel({
           <Skeleton className="h-12 w-full" />
         </div>
       ) : list.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-6 text-center">
-          No students have a review schedule for this course yet.
-        </p>
+        // Empty-state CTA (G4 audit fix, 2026-08-11): new mentors didn't
+        // know what a "review schedule" was or why students weren't
+        // showing up. Now we explain AND offer a next step.
+        <div
+          className="flex flex-col items-center gap-2 py-6 px-2 text-center"
+          data-testid="student-list-empty-state"
+        >
+          <p className="text-sm font-medium text-foreground">
+            No students have a review schedule for this course yet.
+          </p>
+          <p className="text-xs text-muted-foreground max-w-sm">
+            Students get review schedules after completing a course. Once a
+            student finishes one, they&rsquo;ll show up here.
+          </p>
+          {emptyStateCta && (
+            <button
+              type="button"
+              onClick={emptyStateCta.onClick}
+              className="text-xs font-medium text-primary underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+              data-testid="student-list-empty-cta"
+            >
+              {emptyStateCta.label}
+            </button>
+          )}
+        </div>
       ) : visibleCount === 0 ? (
         <p className="text-sm text-muted-foreground py-6 text-center">
           No students match &ldquo;{query}&rdquo;.
