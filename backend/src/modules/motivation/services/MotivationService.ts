@@ -292,11 +292,92 @@ function evaluateBadge(
   }
 }
 
+/**
+ * Per-badge "unit" for the distance column. Mirrors the criteria text
+ * so the mentor-view table reads naturally ("1 review", "4 days",
+ * "3 questions", etc.). Keeps service pure-of-controller state.
+ */
+const BADGE_DISTANCE_UNIT: Record<string, string> = {
+  dwarapala: 'review',
+  pranam: 'questions',
+  kanchuki: 'streak-days',
+  sipahi: 'reviews',
+  'sukh-dukh': 'unsure-answers',
+  vaidya: 'recovered-cards',
+  kohinoor: 'sipahi-courses',
+  pundit: 'sipahi-courses',
+  simha: 'streak-days',
+  rajkumar: 'tier-3-badges',
+  mantri: 'recovered-cards',
+  vikram: 'kohinoor-courses',
+};
+
+/**
+ * Tier precedence for tie-breaking (lower index = wins ties).
+ * Entry tier is closest-to-earned; royalty is the hardest.
+ */
+const TIER_PRECEDENCE: Record<string, number> = {
+  entry: 0,
+  apprentice: 1,
+  courtier: 2,
+  royalty: 3,
+};
+
+/**
+ * For one student, return their single closest unearned badge.
+ * Returns `null` if all 12 badges are already earned.
+ *
+ * "Closest" = smallest `target - current`. Tie-break by tier
+ * (entry first), then alphabetic `badgeId`.
+ *
+ * `studentId`/`studentName` are left blank — the caller fills them
+ * in (service stays student-agnostic).
+ */
 export function computeNextBadgeProximity(
   items: IReviewItem[],
-): NextBadgeProximity[] {
-  void items;
-  return [];
+): NextBadgeProximity | null {
+  const progress = computeBadgeProgress(items);
+  // Filter earned + Vikram-style 0-distance cases (current === target but
+  // not yet earned — Vikram is the only one in the catalogue that has
+  // this shape: `current = target = courseCount`).
+  const unearned = progress.filter(
+    (p) => !p.earned && p.progress.target - p.progress.current > 0,
+  );
+  if (unearned.length === 0) return null;
+  return pickClosestBadge(unearned);
+}
+
+function pickClosestBadge(
+  badges: BadgeProgress[],
+): NextBadgeProximity | null {
+  if (badges.length === 0) return null;
+
+  // Decorate with distance; > 0 guaranteed by caller filter.
+  const decorated = badges.map((b) => ({
+    badge: b.badge,
+    distance: Math.max(0, b.progress.target - b.progress.current),
+  }));
+
+  decorated.sort((a, b) => {
+    // 1. Smaller distance wins.
+    if (a.distance !== b.distance) return a.distance - b.distance;
+    // 2. Tie-break by tier precedence (entry first).
+    const tA = TIER_PRECEDENCE[a.badge.tier] ?? 99;
+    const tB = TIER_PRECEDENCE[b.badge.tier] ?? 99;
+    if (tA !== tB) return tA - tB;
+    // 3. Final tie-break: alphabetic badge id.
+    return a.badge.id.localeCompare(b.badge.id);
+  });
+
+  const winner = decorated[0];
+  return {
+    studentId: '', // controller fills in
+    studentName: '', // controller fills in
+    badgeId: winner.badge.id,
+    badgeName: winner.badge.name,
+    distance: winner.distance,
+    unit: BADGE_DISTANCE_UNIT[winner.badge.id] ?? 'units',
+  };
 }
 
 // ── Status snapshots ───────────────────────────────────────────────────────

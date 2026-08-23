@@ -71,12 +71,12 @@ export function MentorViewPanels({
               { header: 'Student', render: (r) => r.studentName },
               {
                 header: 'Stuck',
-                render: (r) => `${r.stuckCount}`,
+                render: (r) => formatStuckCount(r.stuckCount),
                 align: 'right',
               },
               {
                 header: 'Dipping',
-                render: (r) => `${r.dippingCount}`,
+                render: (r) => formatDippingCount(r.dippingCount),
                 align: 'right',
               },
             ]}
@@ -252,6 +252,32 @@ function EmptyPanel({ children }: { children: React.ReactNode }): React.JSX.Elem
       {children}
     </div>
   );
+}
+
+// ── Panel A column formatters ───────────────────────────────────────────────
+//
+// Human-friendly format for the stuck / dipping counts per the
+// PLAN_MOTIVATION_SYSTEM.md spec:
+//
+//   0  → "0 cards stuck"       / "0 cards in dip"
+//   1  → "1 card stuck at n=0"  / "1 card in 2nd-attempt dip"
+//   2+ → "N cards stuck at n=0" / "N cards in 2nd-attempt dip"
+//
+// Why inline helpers and not a single shared util: the two suffixes
+// (`stuck at n=0` vs `in 2nd-attempt dip`) are domain-specific and
+// unlikely to be reused outside this panel. Keeping them next to the
+// panel keeps the rendering rule discoverable.
+
+function formatStuckCount(n: number): string {
+  if (n === 0) return '0 cards stuck';
+  if (n === 1) return '1 card stuck at n=0';
+  return `${n} cards stuck at n=0`;
+}
+
+function formatDippingCount(n: number): string {
+  if (n === 0) return '0 cards in dip';
+  if (n === 1) return '1 card in 2nd-attempt dip';
+  return `${n} cards in 2nd-attempt dip`;
 }
 
 // ── Loading skeleton ───────────────────────────────────────────────────────

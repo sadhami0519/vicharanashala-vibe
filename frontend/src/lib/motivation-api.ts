@@ -18,6 +18,7 @@ import {
   LearnerCategory,
   MentorViewResponse,
   MotivationMeResponse,
+  NextBadgeProximity,
   StatusSnapshot,
 } from '../types/motivation.types';
 import { DEMO_STUDENT_ID, isDemoStudentEmail } from './spaced-repetition-api';
@@ -573,4 +574,78 @@ export function computeLearnerCategory(
   if (highRetention && !highCoverage) return 'mastery-only';
   if (!highRetention && highCoverage) return 'sprinter';
   return 'quiet';
+}
+
+// ── Next-badge proximity (mock parity) ──────────────────────────────────────
+
+/**
+ * Per-badge "unit" string for the mock distance column. Matches the
+ * backend's `BADGE_DISTANCE_UNIT` in `MotivationService.ts`. If you
+ * change one, change the other (Day 3 follow-up: share via type).
+ */
+const MOCK_BADGE_DISTANCE_UNIT: Record<BadgeId, string> = {
+  dwarapala: 'review',
+  pranam: 'questions',
+  kanchuki: 'streak-days',
+  sipahi: 'reviews',
+  'sukh-dukh': 'unsure-answers',
+  vaidya: 'recovered-cards',
+  kohinoor: 'sipahi-courses',
+  pundit: 'sipahi-courses',
+  simha: 'streak-days',
+  rajkumar: 'tier-3-badges',
+  mantri: 'recovered-cards',
+  vikram: 'kohinoor-courses',
+};
+
+/** Tier precedence for tie-breaking. Entry wins over apprentice, etc. */
+const MOCK_TIER_PRECEDENCE: Record<BadgeTier, number> = {
+  entry: 0,
+  apprentice: 1,
+  courtier: 2,
+  royalty: 3,
+};
+
+/**
+ * Given a student's precomputed `BadgeProgress[]`, return their
+ * single closest unearned badge as a `NextBadgeProximity` row, or
+ * `null` if all 12 are earned.
+ *
+ * Mirrors `computeNextBadgeProximity` in the backend service. Sort
+ * key: distance asc, then tier precedence, then alphabetic badge id.
+ *
+ * TODO Day 3 follow-up: pin parity via a shared test that imports
+ * both this function and the backend service and asserts identical
+ * output for a known fixture.
+ */
+export function computeMockNextBadgeProximity(
+  badges: BadgeProgress[],
+): NextBadgeProximity | null {
+  const unearned = badges.filter(
+    (b) => !b.earned && b.progress.target - b.progress.current > 0,
+  );
+  if (unearned.length === 0) return null;
+
+  const decorated = unearned.map((b) => ({
+    badge: b.badge,
+    distance: Math.max(0, b.progress.target - b.progress.current),
+  }));
+
+  decorated.sort((a, b) => {
+    if (a.distance !== b.distance) return a.distance - b.distance;
+    const tA = MOCK_TIER_PRECEDENCE[a.badge.tier] ?? 99;
+    const tB = MOCK_TIER_PRECEDENCE[b.badge.tier] ?? 99;
+    if (tA !== tB) return tA - tB;
+    return a.badge.id.localeCompare(b.badge.id);
+  });
+
+  const winner = decorated[0];
+  return {
+    studentId: '', // controller / caller fills in
+    studentName: '',
+    badgeId: winner.badge.id,
+    badgeName: winner.badge.name,
+    distance: winner.distance,
+    unit: MOCK_BADGE_DISTANCE_UNIT[winner.badge.id] ?? 'units',
+  };
 }

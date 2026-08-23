@@ -13,12 +13,15 @@ import {
 import { OpenAPI } from 'routing-controllers-openapi';
 import { SPACED_REPETITION_TYPES } from '../../spacedRepetition/types.js';
 import { ReviewItemRepository } from '../../spacedRepetition/repositories/providers/mongodb/ReviewItemRepository.js';
+import { MOTIVATION_TYPES } from '../types.js';
+import { UserDirectoryRepository } from '../repositories/index.js';
 import { IUser } from '#root/shared/interfaces/models.js';
 import {
   computeBadgeProgress,
   computeStatusSnapshots,
   computeRetention30d,
   computeLearnerCategory,
+  computeNextBadgeProximity,
 } from '../services/MotivationService.js';
 import {
   StudentIdParam,
@@ -39,6 +42,8 @@ export class MotivationController {
   constructor(
     @inject(SPACED_REPETITION_TYPES.ReviewItemRepo)
     private readonly reviewItemRepo: ReviewItemRepository,
+    @inject(MOTIVATION_TYPES.UserDirectoryRepo)
+    private readonly userDirectoryRepo: UserDirectoryRepository,
   ) {}
 
   // ── Self-or-admin guard ─────────────────────────────────────────────────
@@ -103,6 +108,7 @@ export class MotivationController {
   ): Promise<LeaderboardResponse> {
     this._assertAdmin(user);
     const students = await this.reviewItemRepo.getDistinctStudentsForCourse(courseId);
+    const nameMap = await this.userDirectoryRepo.getDisplayNamesByFirebaseUIDs(students);
 
     const rows = await Promise.all(
       students.map(async (studentId) => {
@@ -125,7 +131,7 @@ export class MotivationController {
           retention30d,
           coverage,
           isOptedOut: false,
-          studentName: studentId,
+          studentName: nameMap.get(studentId) ?? studentId,
           isCurrentUser: studentId === user.firebaseUID,
           rank: null,
         };
@@ -184,6 +190,11 @@ export class MotivationController {
       query.courseId,
     );
 
+    // Resolve display names once for the cohort (single batched Mongo
+    // query). Per-row lookup is O(1) from the map. Missing rows in the
+    // map fall back to `studentId` so the UI degrades gracefully.
+    const nameMap = await this.userDirectoryRepo.getDisplayNamesByFirebaseUIDs(students);
+
     // Per-student aggregation.
     const perStudent = await Promise.all(
       students.map(async (studentId) => {
@@ -201,9 +212,25 @@ export class MotivationController {
                 Math.round((volume.last30Days.value / studentItems.length) * 100),
               )
             : 0;
+        // Per-student: their single closest unearned badge. Service
+        // returns null if all 12 badges are earned. studentName is the
+        // resolved display name (fallback to studentId if missing).
+        const proximity = computeNextBadgeProximity(studentItems);
+        const nextBadge =
+          proximity === null
+            ? null
+            : {
+                studentId,
+                studentName: nameMap.get(studentId) ?? studentId,
+                badgeId: proximity.badgeId,
+                badgeName: proximity.badgeName,
+                distance: proximity.distance,
+                unit: proximity.unit,
+              };
+
         return {
           studentId,
-          studentName: studentId,
+          studentName: nameMap.get(studentId) ?? studentId,
           retention30d,
           coverage,
           stuckCount: studentItems.filter(
@@ -212,6 +239,7 @@ export class MotivationController {
           dippingCount: studentItems.filter(
             (i) => i.n === 0 && (i.EF ?? 0) <= 2.0,
           ).length,
+          nextBadge,
         };
       }),
     );
@@ -226,9 +254,16 @@ export class MotivationController {
         dippingCount,
       }));
 
-    // Panel B — Next-badge proximity (v1: empty — derived per-student
-    // in v1.1 once we have a richer stored-badge progression model).
-    const nextBadges: MentorViewResponse['nextBadges'] = [];
+    // Panel B — Next-badge proximity. Each student contributes at most
+    // one row (their closest unearned badge). Sort by distance asc;
+    // tie-break by alphabetic badgeId for deterministic ordering.
+    const nextBadges: MentorViewResponse['nextBadges'] = perStudent
+      .map((r) => r.nextBadge)
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => {
+        if (a.distance !== b.distance) return a.distance - b.distance;
+        return a.badgeId.localeCompare(b.badgeId);
+      });
 
     // Panel C — Learner categories 2×2 quadrant
     const learnerCategories = perStudent.map(

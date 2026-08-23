@@ -1,11 +1,13 @@
 /**
  * Inversify DI token symbols for the motivation module.
  *
- * Only one injectable class — the controller — since the service
- * is a module of pure functions, not a class.
+ * Added 2026-07-25: UserDirectoryRepo (for student-name resolution in
+ * the leaderboard + mentor view; previously these endpoints used
+ * `studentId` as the placeholder).
  */
 const TYPES = {
   MotivationController: Symbol.for('MotivationController'),
+  UserDirectoryRepo: Symbol.for('Motivation.UserDirectoryRepo'),
 };
 
 export { TYPES as MOTIVATION_TYPES };
