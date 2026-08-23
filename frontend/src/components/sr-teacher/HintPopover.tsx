@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { Lightbulb, Pencil } from "lucide-react"
+import * as PopoverPrimitive from "@radix-ui/react-popover"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/utils/utils"
@@ -101,18 +102,18 @@ export function HintPopover({
           e.preventDefault()
         }}
       >
-        {/* Speech bubble: rounded card with a small downward arrow.
-            The arrow is rendered by setting side="top" + sideOffset;
-            Radix handles the positioning. We add a small "tail" via
-            a pseudo-element via a child div with absolute positioning.
-            Tailwind doesn't have a built-in triangle utility, so we
-            use a small rotated square as the arrow for cleanliness. */}
-        <div className="relative px-3 py-2.5 pr-2">
-          {/* Arrow pointing down at the trigger (only visible when side="top") */}
-          <div
-            aria-hidden="true"
-            className="absolute -bottom-1.5 right-4 h-3 w-3 rotate-45 bg-popover border-r border-b border-border"
-          />
+        {/* Radix's built-in arrow. Drawn as a proper triangle that matches
+            the popover's border (no manual rotated-square seam where
+            adjacent visible borders intersect with the popover's rounded
+            bottom-right corner). `fill-popover` matches the body, and we
+            explicitly set the stroke to match the popover border so the
+            arrow's outline reads as a continuous edge with the popover. */}
+        <PopoverPrimitive.Arrow
+          className="fill-popover stroke-border"
+          width={10}
+          height={5}
+        />
+        <div className="px-3 py-2.5">
           <div className="flex items-start justify-between gap-2 mb-1.5">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Hint for Q…{questionIdShort}
@@ -125,7 +126,7 @@ export function HintPopover({
                 setOpen(false)
                 onEdit()
               }}
-              className="h-6 px-1.5 text-xs text-amber-700 hover:text-amber-900 hover:bg-amber-50"
+              className="-mr-1 h-6 px-1.5 text-xs text-amber-700 hover:text-amber-900 hover:bg-amber-50"
               title="Edit this hint"
             >
               <Pencil className="h-3 w-3" />

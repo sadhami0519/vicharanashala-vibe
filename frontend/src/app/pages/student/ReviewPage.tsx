@@ -85,8 +85,8 @@ export default function ReviewPage() {
   // --- STATE 1: CAUGHT UP (Empty State) ---
   if (activeQueue.length === 0 && sessionState !== 'complete') {
     return (
-      <Card className="max-w-md mx-auto mt-12 text-center py-12 border-emerald-100 bg-emerald-50/30">
-        <CheckCircle className="h-12 w-12 text-emerald-500 mx-auto mb-4" />
+      <Card className="max-w-md mx-auto mt-12 text-center py-12 border-emerald-100 bg-emerald-50/30 dark:border-emerald-800 dark:bg-emerald-950/20">
+        <CheckCircle className="h-12 w-12 text-emerald-500 dark:text-emerald-400 mx-auto mb-4" />
         <CardTitle className="mb-2">You're all caught up!</CardTitle>
         <p className="text-muted-foreground mb-6">No cards are due for review right now.</p>
         <Button asChild>
@@ -109,7 +109,7 @@ export default function ReviewPage() {
           {targetCourseId && <p className="text-sm">Targeting specific course.</p>}
           
           {hasExamPrep && (
-            <div className="inline-flex items-center gap-1.5 bg-amber-100 text-amber-800 px-3 py-1.5 rounded-full text-xs font-medium mt-2">
+            <div className="inline-flex items-center gap-1.5 bg-amber-100 text-amber-800 px-3 py-1.5 rounded-full text-xs font-medium mt-2 dark:bg-amber-950/30 dark:text-amber-200">
               <Flame className="h-3.5 w-3.5" />
               Exam Prep Mode active for this deck
             </div>
@@ -131,17 +131,17 @@ export default function ReviewPage() {
       <div className="max-w-2xl mx-auto mt-8 space-y-6">
         <div className="flex justify-between items-center text-sm font-medium text-muted-foreground px-1">
           <span>Card {currentIndex + 1} of {activeQueue.length}</span>
-          {isExamPrep && <span className="text-amber-600 flex items-center gap-1"><Flame className="h-4 w-4" /> Priority</span>}
+          {isExamPrep && <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1"><Flame className="h-4 w-4" /> Priority</span>}
         </div>
 
-        <Card className={`min-h-[300px] flex flex-col transition-all duration-300 ${isExamPrep ? 'ring-2 ring-amber-400/50 shadow-amber-100' : 'shadow-md'}`}>
+        <Card className={`min-h-[300px] flex flex-col transition-all duration-300 ${isExamPrep ? 'ring-2 ring-amber-400/50 dark:ring-amber-500/40 shadow-amber-100' : 'shadow-md'}`}>
           <CardContent className="flex-1 flex flex-col items-center justify-center p-8 text-center">
             {/* The "Front" of the card */}
             <h2 className="text-2xl font-medium mb-6">Question {currentCard.question_id}</h2>
             
             {/* Teacher Remediation Hint - Shows up if they have struggled before */}
             {currentCard.remediation_hint && (
-              <div className="bg-blue-50 text-blue-800 border border-blue-200 rounded p-3 text-sm flex items-start gap-2 max-w-sm mb-6">
+              <div className="bg-blue-50 text-blue-800 border border-blue-200 rounded p-3 text-sm flex items-start gap-2 max-w-sm mb-6 dark:bg-blue-950/20 dark:text-blue-200 dark:border-blue-800">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                 <span className="text-left"><strong>Teacher Hint:</strong> {currentCard.remediation_hint}</span>
               </div>
@@ -160,16 +160,16 @@ export default function ReviewPage() {
                 
                 <p className="font-medium text-sm mb-4">How well did you remember this?</p>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2 w-full max-w-lg">
-                  <Button disabled={isSubmitting} variant="outline" className="border-rose-200 hover:bg-rose-50 hover:text-rose-700" onClick={() => handleScoreSubmit(1)}>
+                  <Button disabled={isSubmitting} variant="outline" className="border-rose-200 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-800 dark:hover:bg-rose-950/30 dark:hover:text-rose-300" onClick={() => handleScoreSubmit(1)}>
                     Again (1)
                   </Button>
-                  <Button disabled={isSubmitting} variant="outline" className="border-amber-200 hover:bg-amber-50 hover:text-amber-700" onClick={() => handleScoreSubmit(3)}>
+                  <Button disabled={isSubmitting} variant="outline" className="border-amber-200 hover:bg-amber-50 hover:text-amber-700 dark:border-amber-800 dark:hover:bg-amber-950/30 dark:hover:text-amber-300" onClick={() => handleScoreSubmit(3)}>
                     Hard (3)
                   </Button>
-                  <Button disabled={isSubmitting} variant="outline" className="border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700" onClick={() => handleScoreSubmit(4)}>
+                  <Button disabled={isSubmitting} variant="outline" className="border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 dark:border-emerald-800 dark:hover:bg-emerald-950/30 dark:hover:text-emerald-300" onClick={() => handleScoreSubmit(4)}>
                     Good (4)
                   </Button>
-                  <Button disabled={isSubmitting} variant="outline" className="border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={() => handleScoreSubmit(5)}>
+                  <Button disabled={isSubmitting} variant="outline" className="border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-800 dark:hover:bg-blue-950/30 dark:hover:text-blue-300" onClick={() => handleScoreSubmit(5)}>
                     Easy (5)
                   </Button>
                 </div>
@@ -183,9 +183,9 @@ export default function ReviewPage() {
 
   // --- STATE 4: COMPLETE ---
   return (
-    <Card className="max-w-md mx-auto mt-12 text-center py-12 border-emerald-100 bg-emerald-50/30">
-      <CardTitle className="mb-2 text-emerald-700 text-2xl">Session Complete!</CardTitle>
-      <p className="text-emerald-600/80 mb-8">Great job crushing those reviews.</p>
+    <Card className="max-w-md mx-auto mt-12 text-center py-12 border-emerald-100 bg-emerald-50/30 dark:border-emerald-800 dark:bg-emerald-950/20">
+      <CardTitle className="mb-2 text-emerald-700 dark:text-emerald-300 text-2xl">Session Complete!</CardTitle>
+      <p className="text-emerald-600/80 dark:text-emerald-400/80 mb-8">Great job crushing those reviews.</p>
       <Button asChild size="lg">
         <Link to="/student">Return to Dashboard</Link>
       </Button>

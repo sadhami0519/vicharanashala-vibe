@@ -92,6 +92,8 @@ const spacedRepetitionService = new SpacedRepetitionService(
   studentSRStatusRepo,
   questionBankRepo,
   questionRepo,
+  courseRepo,
+  userRepo,
 )
 const progressService = new ProgressService(progressRepo, submissionRepo, courseRepo, settingsRepo, userRepo, itemRepo, enrollmentRepo, userQuizMetricsRepo, quizRepo, projectSubmissionRepo, feedbackRepo, database, spacedRepetitionService, questionBankRepo)
 const enrollmentService = new EnrollmentService(enrollmentRepo, courseRepo, userRepo, itemRepo, courseRegistrationRepo, progressService, settingsRepo, inviteRepo, progressRepo, ledgerRepo, database)

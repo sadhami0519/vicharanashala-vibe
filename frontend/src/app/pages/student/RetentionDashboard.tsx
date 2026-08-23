@@ -25,7 +25,6 @@ import {
   Inbox,
   Flame, // Added for Exam Prep Mode visibility
   Ban, // Added for SR-disabled empty state (Knob 6, Phase C, 2026-07-21)
-  Trophy, // Added for the per-course leaderboard link (2026-07-31)
 } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
 import {
@@ -59,12 +58,12 @@ function retentionBand(percent: number): {
   chipClass: string;
 } {
   if (percent >= 75) {
-    return { label: 'Strong', chipClass: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
+    return { label: 'Strong', chipClass: 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800' };
   }
   if (percent >= 50) {
-    return { label: 'Steady', chipClass: 'bg-amber-100 text-amber-700 border-amber-200' };
+    return { label: 'Steady', chipClass: 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-800' };
   }
-  return { label: 'Needs work', chipClass: 'bg-rose-100 text-rose-700 border-rose-200' };
+  return { label: 'Needs work', chipClass: 'bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-950/30 dark:text-rose-300 dark:border-rose-800' };
 }
 
 function isOverdue(item: ReviewItem): boolean {
@@ -339,21 +338,6 @@ function CourseRetentionCard({
             <ChevronRight className="h-4 w-4" aria-hidden="true" />
           </Link>
         )}
-        {/* Per-course leaderboard link — always visible, preselects
-            this course on the standalone /student/leaderboard page
-            (see studentLeaderboardRoute.validateSearch). */}
-        <Link
-          to="/student/leaderboard"
-          search={{ courseId: data.courseId }}
-          className="flex items-center justify-between text-sm font-medium text-amber-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 rounded dark:text-amber-300"
-          aria-label={`View leaderboard for ${courseLabel(data.courseId)}`}
-        >
-          <span className="flex items-center gap-1.5">
-            <Trophy className="h-4 w-4" aria-hidden="true" />
-            View leaderboard for this course
-          </span>
-          <ChevronRight className="h-4 w-4" aria-hidden="true" />
-        </Link>
       </CardContent>
     </Card>
   );

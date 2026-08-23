@@ -19,8 +19,8 @@ import { spacedRepetitionKeys } from "@/hooks/spaced-repetition-hooks"
 import { studentDisplay, courseDisplay, getQuestionSummary, getSchedule, bulkUpdateExamPrepMode } from "@/lib/spaced-repetition-api"
 import { CourseMultiSelectCard } from "@/components/sr-teacher/CourseMultiSelectCard"
 import { StudentListPanel } from "@/components/sr-teacher/StudentListPanel"
-import { HintPopover } from "@/components/sr-teacher/HintPopover"
-import { cn } from "@/utils/utils"
+import { StudentCourseCardList } from "@/components/sr-teacher/StudentCourseCardList"
+import { retentionColor } from "@/app/pages/teacher/TeacherSRDashboard.helpers"
 import { InfoPopover } from "@/components/InfoPopover"
 import { SpacedRepetitionInfoBody, SPACED_REPETITION_INFO_TITLE } from "@/components/spaced-repetition-info"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -37,53 +37,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Loader2, Zap, Pause, Play, RotateCcw, BookOpen, Clock, AlertCircle, GraduationCap, ChevronDown, ChevronRight, Users, Bell, BellOff, Ban, Power, Send, Library, MessageSquareText, Lightbulb } from "lucide-react"
+import { Loader2, Zap, Pause, Play, BookOpen, AlertCircle, GraduationCap, ChevronDown, ChevronRight, Users, Bell, BellOff, Ban, Power, Send, Library, MessageSquareText, Lightbulb } from "lucide-react"
 import { toast } from "sonner"
-import type { ReviewItem } from "@/types/spaced-repetition.types"
+import type { ReviewItem, QuestionSummary } from "@/types/spaced-repetition.types"
 
-/**
- * Human-friendly relative-time formatter for the per-card "next review due"
- * column. Days-precision only — matches the existing `interval_days` field
- * already shown on each card. Designed to read at a glance:
- *   - "today" / "tomorrow"  → short, no unit suffix
- *   - "overdue 2d"          → negative prefix, days count, unit
- *   - "in 5d"               → positive prefix, days count, unit
- *   - "-"                    → for invalid / unparseable input (defensive)
- *
- * Stays local to this file because no other dashboard needs the exact
- * shape. If a second consumer appears, promote to `utils/`.
- */
-function formatRelativeWhen(iso: string | null | undefined): string {
-  if (!iso) return "-"
-  const ts = new Date(iso).getTime()
-  if (!Number.isFinite(ts)) return "-"
-  const diffMs = ts - Date.now()
-  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24))
-  if (diffDays === 0) return "today"
-  if (diffDays === 1) return "tomorrow"
-  if (diffDays === -1) return "yesterday"
-  if (diffDays > 0) return `in ${diffDays}d`
-  // diffDays < -1: overdue. Use a positive count for readability.
-  return `overdue ${Math.abs(diffDays)}d`
-}
-
-function retentionColor(ef: number) {
-  if (ef >= 2.5) return "text-green-600"
-  if (ef >= 1.8) return "text-yellow-600"
-  return "text-red-600"
-}
-
-// Per-card left-stripe colour (added 2026-08-04). Mirrors retentionColor() but
-// returns a Tailwind class for `border-l-{color}-{weight}` so a glance at the
-// card list tells the retention story without reading every number.
-//   >= 2.5 → emerald  (strong)
-//   >= 1.8 → amber    (steady)
-//   <  1.8 → rose     (needs work)
-function efStripeClass(ef: number): string {
-  if (ef >= 2.5) return "border-l-emerald-500"
-  if (ef >= 1.8) return "border-l-amber-500"
-  return "border-l-rose-500"
-}
+// `formatRelativeWhen`, `retentionColor`, and `efStripeClass` were moved
+// out to `TeacherSRDashboard.helpers.ts` on 2026-08-13 so the new
+// `StudentCourseCardList` component could reuse them without circular
+// imports. Aggregate cohort UI (`statAccentClass`, `computeStudentStats`)
+// still uses its own copy of the band thresholds and stays in this file.
 
 // Stat-card top-border accent (added 2026-08-04). Same band thresholds as
 // efStripeClass(), but rendered as `border-t-{color}-500`.
@@ -229,7 +191,7 @@ export default function TeacherSRDashboard() {
     })),
   })
   const questionSummaryById = useMemo(() => {
-    const map = new Map<string, { body: string; type: string; bankTitles: string[] }>()
+    const map = new Map<string, QuestionSummary>()
     questionSummaryQueries.forEach((q, idx) => {
       const id = uniqueQuestionIds[idx]
       if (id && q.data?.question) {
@@ -1238,134 +1200,26 @@ export default function TeacherSRDashboard() {
                         className="border-t border-border px-3 py-3 space-y-2"
                         data-testid={`student-card-detail-${studentId}`}
                       >
-                        {items.length === 0 ? (
-                          <p className="text-muted-foreground text-sm py-2">
-                            No review cards yet. Students get a review schedule after
-                            they finish a course - once they complete one, their cards
-                            will appear here.
-                          </p>
-                        ) : (
-                          items.map(item => (
-                            <div
-                              key={item._id}
-                              className={cn(
-                                "rounded-lg border border-border bg-background hover:bg-muted/30 motion-safe:transition-colors px-3 py-2.5 space-y-1.5",
-                                "border-l-4",
-                                efStripeClass(item.EF),
-                              )}
-                            >
-                              {/* TIER 1 — body line: course, question preview, memory strength */}
-                              <div className="flex items-center gap-2 min-w-0">
-                                <Badge variant="outline" className="text-xs shrink-0" title={item.course_id}>
-                                  {courseDisplay(item.course_id).name}
-                                </Badge>
-                                {questionSummaryById.get(item.question_id) ? (
-                                  <span
-                                    className="text-sm text-foreground/90 truncate flex-1 min-w-0"
-                                    title={questionSummaryById.get(item.question_id)?.body}
-                                  >
-                                    {questionSummaryById.get(item.question_id)?.body}
-                                  </span>
-                                ) : (
-                                  <span
-                                    className="text-xs text-muted-foreground font-mono shrink-0"
-                                    title={item.question_id}
-                                  >
-                                    Q:{item.question_id.slice(0, 8)}
-                                  </span>
-                                )}
-                                <span
-                                  className={cn("text-sm font-bold shrink-0 tabular-nums", retentionColor(item.EF))}
-                                  title="Memory strength. 1.3 (struggling) to 3.0 (rock-solid). Higher = stronger recall."
-                                >
-                                  {item.EF.toFixed(2)}
-                                </span>
-                              </div>
-
-                              {/* TIER 2 — status row: badges + schedule. Skipped when empty
-                                  (no badges + no schedule relevant to surface). */}
-                              {(item.is_paused || item.exam_prep_mode || item.remediation_hint) && (
-                                <div className="flex flex-wrap items-center gap-2 text-xs">
-                                  {item.is_paused && (
-                                    <Badge variant="secondary" className="text-[10px] py-0" title="Reminders for this card are paused.">
-                                      Paused
-                                    </Badge>
-                                  )}
-                                  {item.exam_prep_mode && (
-                                    <Badge className="text-[10px] py-0 bg-indigo-600" title="Hardest-first sort.">
-                                      Exam-prep
-                                    </Badge>
-                                  )}
-                                  {/* HintPopover replaces the old inline hint preview + the
-                                      amber "Hint set" badge. Click the chip to read; click Edit
-                                      inside the bubble to change. */}
-                                  <HintPopover
-                                    hint={item.remediation_hint ?? null}
-                                    questionIdShort={item.question_id.slice(-6)}
-                                    onEdit={() => openHintEditor(studentId, item.question_id, item.remediation_hint ?? null)}
-                                  />
-                                </div>
-                              )}
-
-                              {/* TIER 3 — schedule + actions. Schedule on left, actions
-                                  right-aligned. Both render on every card (so the teacher
-                                  always sees when and what they can do). */}
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
-                                  <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
-                                  <span
-                                    className="whitespace-nowrap truncate"
-                                    title={`When the algorithm thinks this card is next due. Interval: ${item.interval_days}d.`}
-                                  >
-                                    Due {formatRelativeWhen(item.next_review_at)}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 text-xs"
-                                    onClick={() => handleBoost(studentId, item.question_id)}
-                                    disabled={actionLoading === `${studentId}-${item.question_id}-boost`}
-                                    title="Make this card due for review right now. Useful for a hard concept the student needs to see again."
-                                  >
-                                    {actionLoading === `${studentId}-${item.question_id}-boost` ? (
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                    ) : (
-                                      <Zap className="w-3 h-3 text-orange-500" />
-                                    )}
-                                    <span className="ml-1">Make due now</span>
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 text-xs text-destructive"
-                                    onClick={() => requestHandleReset(studentId, item.question_id)}
-                                    disabled={actionLoading === `${studentId}-${item.question_id}-reset`}
-                                    title="Remove this card from the student's schedule. They'll have to relearn it on the next course completion."
-                                  >
-                                    {actionLoading === `${studentId}-${item.question_id}-reset` ? (
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                    ) : (
-                                      <RotateCcw className="w-3 h-3" />
-                                    )}
-                                    <span className="ml-1">Send back</span>
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 text-xs text-amber-600"
-                                    onClick={() => openHintEditor(studentId, item.question_id, item.remediation_hint ?? null)}
-                                    title={item.remediation_hint ? `Edit hint: ${item.remediation_hint}` : "Write a short note your student will see next time they review this question"}
-                                  >
-                                    <MessageSquareText className="w-3 h-3" />
-                                    <span className="ml-1">{item.remediation_hint ? "Edit hint" : "Add hint"}</span>
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                          ))
-                        )}
+                        {/*
+                          Per-student drill-down panel. Replaces the previous
+                          flat-list dump on 2026-08-13 — see
+                          `components/sr-teacher/StudentCourseCardList.tsx`.
+                          Behaviour:
+                            - Empty state: same copy as before.
+                            - Non-empty: grouped by course_id, sorted by
+                              course name A→Z; first course auto-expanded;
+                              teacher can toggle others.
+                            - Search + sort: added in Step 3.
+                        */}
+                        <StudentCourseCardList
+                          studentId={studentId}
+                          items={items}
+                          questionSummaryById={questionSummaryById}
+                          actionLoading={actionLoading}
+                          onBoost={handleBoost}
+                          onRequestReset={requestHandleReset}
+                          onOpenHintEditor={openHintEditor}
+                        />
                       </div>
                     )}
                   </div>
@@ -1389,7 +1243,7 @@ export default function TeacherSRDashboard() {
         }}
       >
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+          <DialogHeader className="mb-3">
             <DialogTitle className="flex items-center gap-2">
               <MessageSquareText className="h-4 w-4 text-amber-600" />
               {hintEditor?.existingHint ? "Edit hint" : "Add hint"}
@@ -1400,7 +1254,7 @@ export default function TeacherSRDashboard() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             <Input
               value={hintEditor?.draft ?? ""}
               onChange={(e) =>
@@ -1425,7 +1279,7 @@ export default function TeacherSRDashboard() {
                 below shows the visual rendering; the helper text flags
                 this so the teacher understands the timing. */}
             {hintEditor && (hintEditor.draft.trim() || hintEditor.existingHint) && (
-              <div className="space-y-1.5 pt-1">
+              <div className="space-y-1.5">
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Student preview
                 </div>
@@ -1460,7 +1314,7 @@ export default function TeacherSRDashboard() {
             )}
           </div>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="mt-4 sm:mt-6 gap-2 border-t border-border/50 pt-4">
             <Button variant="outline" onClick={closeHintEditor}>
               Cancel
             </Button>
@@ -1470,11 +1324,11 @@ export default function TeacherSRDashboard() {
             >
               {hintMutation.isPending ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...
+                  <Loader2 className="h-4 w-4 animate-spin" /> Saving...
                 </>
               ) : (
                 <>
-                  <MessageSquareText className="mr-2 h-4 w-4" /> Save Hint
+                  <MessageSquareText className="h-4 w-4" /> Save Hint
                 </>
               )}
             </Button>
@@ -1652,11 +1506,11 @@ export default function TeacherSRDashboard() {
             >
               {assignMutation.isPending ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Adding…
+                  <Loader2 className="h-4 w-4 animate-spin" /> Adding…
                 </>
               ) : (
                 <>
-                  <Send className="mr-2 h-4 w-4" />{' '}
+                  <Send className="h-4 w-4" />{' '}
                   {assignForStudents.length > 1
                     ? `Add to ${assignForStudents.length} students`
                     : 'Assign'}
