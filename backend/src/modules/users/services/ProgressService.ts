@@ -78,6 +78,13 @@ export interface LeaderboardEntry {
 // threshold, without requiring every item to be marked complete.
 const FOLLOW_UP_INVITE_THRESHOLD = 98;
 
+// Item types whose completion can be judged from watch timestamps alone, and so
+// are the only ones the orphan recovery job will close. Mirrors the
+// WATCH_TIME_REQUIRED_ITEMS set the live stop path validates against. QUIZ and
+// PROJECT are excluded on purpose: their completion depends on a submission,
+// which a background sweep must never fabricate.
+const WATCH_TIME_RECOVERABLE_ITEMS = new Set<string>(['VIDEO', 'BLOG']);
+
 @injectable()
 class ProgressService extends BaseService {
   private getCourseSettingService(): CourseSettingService {
@@ -834,11 +841,21 @@ class ProgressService extends BaseService {
     if (itemsGroup && itemsGroup.items) {
       itemsGroup.items = itemsGroup.items.filter((i: any) => !i.isHidden && !i.isDeleted);
     }
-    const sortedItems = itemsGroup.items.sort((a, b) =>
+    /**
+     * A section can legitimately end up with nothing visible — every item hidden
+     * or soft-deleted — and the filter above then leaves an empty array. Indexing
+     * it threw "Cannot read properties of undefined (reading '_id')", which
+     * surfaced as a 500 on stopItem and left the learner unable to complete the
+     * item at all. Treated as "last in this section" so sequencing moves on to the
+     * next section, matching how getFirstItemInSequence already guards this.
+     */
+    const sortedItems = (itemsGroup?.items ?? []).sort((a, b) =>
       a.order.localeCompare(b.order),
     );
-    const lastItem = sortedItems[sortedItems.length - 1]._id;
-    if (lastItem?.toString() === itemId) {
+    const lastItem = sortedItems.length
+      ? sortedItems[sortedItems.length - 1]._id
+      : undefined;
+    if (!sortedItems.length || lastItem?.toString() === itemId) {
       isLastItem = true;
     }
 
@@ -956,11 +973,13 @@ class ProgressService extends BaseService {
     if (itemsGroup && itemsGroup.items) {
       itemsGroup.items = itemsGroup.items.filter((i: any) => !i.isHidden && !i.isDeleted);
     }
-    const sortedItems = itemsGroup.items.sort((a, b) =>
+    // Same empty-section guard as getNextItemInSequence: nothing visible means
+    // treat the item as first here, so we look to the previous section.
+    const sortedItems = (itemsGroup?.items ?? []).sort((a, b) =>
       a.order.localeCompare(b.order),
     );
-    const firstItem = sortedItems[0]._id;
-    if (firstItem?.toString() === itemId) {
+    const firstItem = sortedItems.length ? sortedItems[0]._id : undefined;
+    if (!sortedItems.length || firstItem?.toString() === itemId) {
       isFirstItem = true;
     }
 
@@ -1682,7 +1701,7 @@ class ProgressService extends BaseService {
 
       return {
         completed: progress.completed,
-        percentCompleted: Math.min(100, enrollment.percentCompleted),
+        percentCompleted: Math.min(100, enrollment.percentCompleted ?? 0),
         totalItems,
         completedItems: completedItemsSet.size,
       };
@@ -2312,6 +2331,26 @@ class ProgressService extends BaseService {
       throw new NotFoundError('Item not found');
     }
 
+    /**
+     * Idempotency guard: if the frontend retries this call (e.g. because a
+     * slow/truncated response on the first attempt looked like a failure),
+     * and this item is already marked complete, treat it as a safe no-op
+     * instead of re-running the transaction - which would otherwise throw
+     * on the watch-time record already being closed out, confusing a
+     * successful retry into an error.
+     */
+    if (
+      await this.progressRepository.isItemCompleted(
+        userId,
+        courseId,
+        courseVersionId,
+        itemId,
+        cohortId,
+      )
+    ) {
+      return;
+    }
+
     const versionStatus = await this.courseRepo.getCourseVersionStatus(
       courseVersionId,
     );
@@ -2445,18 +2484,19 @@ class ProgressService extends BaseService {
       );
       const totalCourseItems = allCourseItemIdSet.size;
 
+      // Fetched once and reused below (step 4's non-linear check and step 8's
+      // percentage calculation both need this - it used to be queried twice).
+      const completedItemsArray = await this.progressRepository.getCompletedItems(
+        userId,
+        courseId,
+        courseVersionId,
+        cohortId,
+      );
+
       // ----------------------------------------------------
       // 4. NON-LINEAR PROGRESSION FINAL COMPLETION CHECK
       // ----------------------------------------------------
       if (!linearProgressionEnabled && isCompleted) {
-        const completedItemsArray =
-          await this.progressRepository.getCompletedItems(
-            userId,
-            courseId,
-            courseVersionId,
-            cohortId,
-          );
-
         const completedItemsSet = new Set(
           completedItemsArray.map(id => id.toString()),
         );
@@ -2539,56 +2579,35 @@ class ProgressService extends BaseService {
         cohortId,
       );
 
+      // Throwing here — rather than returning — aborts the whole transaction,
+      // so the watchTime row closed in step 1 above rolls back too. A silent
+      // return previously let that write commit on its own: the item's
+      // endTime got set with no corresponding progress update, which is
+      // indistinguishable from a genuinely completed stop to the client (200
+      // OK) while leaving the student's currentItem pointer stuck. Matches
+      // the same missing-enrollment convention already used in
+      // updateEnrollmentProgressPercent above.
       if (!enrollment) {
-        return;
+        throw new NotFoundError(
+          'User has no enrollment for this course version — cannot record progress',
+        );
       }
 
       // ----------------------------------------------------
       // 8. DERIVED PROGRESS CALCULATION
       // ----------------------------------------------------
-      let totalItems = totalCourseItems;
-
-      const completedItemsArray =
-        await this.progressRepository.getCompletedItems(
-          userId,
-          courseId,
+      // completedItemsArray was already fetched once above (step 3/4 reuse
+      // it too) - computeCourseProgressPercent takes it as a parameter
+      // specifically so callers that already have it don't fetch it again.
+      const {percentCompleted, completedCourseItemsCount} =
+        await this.computeCourseProgressPercent(
+          completedItemsArray,
+          allCourseItemIdSet,
+          totalCourseItems,
           courseVersionId,
-          cohortId,
-        );
-
-      let completedItemsSet = new Set(
-        completedItemsArray.map(id => id.toString()),
-      );
-
-      if (shouldCountCurrentItemAsCompleted) {
-        completedItemsSet.add(itemId);
-      }
-
-      const hiddenItems =
-        await this.progressRepository.getHiddenOrDeletedItems(
-          courseVersionId,
+          shouldCountCurrentItemAsCompleted ? itemId : undefined,
           session,
         );
-
-      const hiddenSet = new Set(hiddenItems.map(i => i.itemId.toString()));
-
-      completedItemsSet = new Set(
-        Array.from(completedItemsSet).filter(id => !hiddenSet.has(id)),
-      );
-
-      totalItems = totalItems - hiddenSet.size;
-
-      const completedCourseItemsCount = Array.from(allCourseItemIdSet).filter(
-        id => completedItemsSet.has(id),
-      ).length;
-
-      const rawPercent =
-        totalItems > 0 ? (completedCourseItemsCount / totalItems) * 100 : 0;
-
-      const percentCompleted = Math.min(
-        100,
-        parseFloat(rawPercent.toFixed(2)),
-      );
 
       // ----------------------------------------------------
       // 9. GURU SETU OVERRIDE
@@ -2672,6 +2691,424 @@ class ProgressService extends BaseService {
   }
 
   /**
+   * Course completion percentage, with hidden and soft-deleted items removed
+   * from both sides of the fraction.
+   *
+   * Shared by the live stop path and the orphan recovery job so a recovered
+   * session produces exactly the same numbers a normal stop would have.
+   *
+   * @param extraCompletedItemId item to count as complete on top of what the
+   * watchTime records already show — the one being completed right now, whose
+   * row may not be visible to the read inside this transaction.
+   */
+  private async computeCourseProgressPercent(
+    completedItemsArray: string[],
+    allCourseItemIdSet: Set<string>,
+    totalCourseItems: number,
+    courseVersionId: string,
+    extraCompletedItemId?: string,
+    session?: ClientSession,
+  ): Promise<{percentCompleted: number; completedCourseItemsCount: number}> {
+    let completedItemsSet = new Set(
+      completedItemsArray.map(id => id.toString()),
+    );
+
+    if (extraCompletedItemId) {
+      completedItemsSet.add(extraCompletedItemId);
+    }
+
+    const hiddenItems = await this.progressRepository.getHiddenOrDeletedItems(
+      courseVersionId,
+      session,
+    );
+
+    const hiddenSet = new Set(hiddenItems.map(i => i.itemId.toString()));
+
+    completedItemsSet = new Set(
+      Array.from(completedItemsSet).filter(id => !hiddenSet.has(id)),
+    );
+
+    const totalItems = totalCourseItems - hiddenSet.size;
+
+    const completedCourseItemsCount = Array.from(allCourseItemIdSet).filter(
+      id => completedItemsSet.has(id),
+    ).length;
+
+    const rawPercent =
+      totalItems > 0 ? (completedCourseItemsCount / totalItems) * 100 : 0;
+
+    return {
+      percentCompleted: Math.min(100, parseFloat(rawPercent.toFixed(2))),
+      completedCourseItemsCount,
+    };
+  }
+
+  /**
+   * Move a student's progress pointer past an item that has just been
+   * completed, and refresh their enrollment percentage.
+   *
+   * This is the non-quiz portion of what stopItem does after it closes a watch
+   * session, reused by the orphan recovery job (#1289) and the admin manual
+   * unstick path (#1295). It deliberately leaves out stopItem's quiz rewind,
+   * its Guru Setu override and its follow-up invite trigger — neither of
+   * those callers handles quizzes, and neither should trigger a student
+   * invite off the back of a background sweep or an admin action.
+   *
+   * If itemId has no next item in sequence, this marks the whole course
+   * completed rather than refusing — callers advancing a student off their
+   * literal last remaining item should be aware of that rather than
+   * surprised by it.
+   */
+  private async advanceProgressAfterItemCompletion(
+    userId: string,
+    courseId: string,
+    courseVersionId: string,
+    courseVersion: ICourseVersion,
+    moduleId: string,
+    sectionId: string,
+    itemId: string,
+    cohortId: string | undefined,
+    session: ClientSession,
+  ): Promise<boolean> {
+    const nextItem = await this.getNextItemInSequence(
+      courseVersion,
+      moduleId,
+      sectionId,
+      itemId,
+    );
+
+    const newProgress: Partial<IProgress> = nextItem
+      ? {
+        completed: false,
+        currentModule: nextItem.moduleId,
+        currentSection: nextItem.sectionId,
+        currentItem: nextItem.itemId,
+        ...(cohortId ? {cohortId: new ObjectId(cohortId)} : {}),
+      }
+      : {
+        currentModule: moduleId,
+        currentSection: sectionId,
+        currentItem: itemId,
+        completed: true,
+        completedAt: new Date(),
+        ...(cohortId ? {cohortId: new ObjectId(cohortId)} : {}),
+      };
+
+    const enrollment = await this.resolveEnrollment(
+      userId,
+      courseId,
+      courseVersionId,
+      cohortId,
+    );
+
+    if (!enrollment) {
+      return false;
+    }
+
+    const allCourseItemIds = await this.getAllItemIds(courseVersionId);
+    const allCourseItemIdSet = new Set(
+      allCourseItemIds.map(id => id.toString()),
+    );
+
+    const completedItemsArray = await this.progressRepository.getCompletedItems(
+      userId,
+      courseId,
+      courseVersionId,
+      cohortId,
+    );
+
+    const {percentCompleted, completedCourseItemsCount} =
+      await this.computeCourseProgressPercent(
+        completedItemsArray,
+        allCourseItemIdSet,
+        allCourseItemIdSet.size,
+        courseVersionId,
+        itemId,
+        session,
+      );
+
+    await this.enrollmentRepo.updateProgressPercentById(
+      enrollment._id.toString(),
+      percentCompleted,
+      completedCourseItemsCount,
+      cohortId,
+    );
+
+    const updatedProgress = await this.progressRepository.updateProgress(
+      userId,
+      courseId,
+      courseVersionId,
+      newProgress,
+      cohortId,
+      session,
+    );
+
+    return Boolean(updatedProgress);
+  }
+
+  /**
+   * Admin-only manual unstick: advance a student's currentItem past whatever
+   * item they are currently stuck on, without a genuine completion.
+   *
+   * Deliberately narrow by design (see #1295): who can call this is enforced
+   * at the controller (admin only — not instructors, not the student), and
+   * this moves exactly one item per call. To unstick a student several items
+   * back, call it again — each call is independently audited.
+   *
+   * Never fabricates a completed watchTime, since the student didn't
+   * actually watch the item — isItemCompleted/getCompletedItems only look at
+   * watchTime, so this never shows up as a genuine completion. The skip is
+   * recorded via recordAdminSkip so it stays distinguishable from an item
+   * the student simply never reached, but — known, accepted limitation —
+   * it is NOT excluded from computeCourseProgressPercent's denominator in
+   * this version. A student advanced past N items this way will show a
+   * percentage capped below 100% until admin skips are taught to that
+   * calculation the way hidden/deleted items already are. Left out of this
+   * change deliberately: that calculation is also what the live stopItem
+   * completion path depends on, and widening it needs its own review rather
+   * than riding in on an admin utility.
+   */
+  async adminAdvanceStuckStudent(
+    userId: string,
+    courseId: string,
+    courseVersionId: string,
+    reason: string,
+    skippedBy: string,
+    cohortId?: string,
+  ): Promise<boolean> {
+    return this._withTransaction(async session => {
+      const progress = await this.progressRepository.findProgress(
+        userId,
+        courseId,
+        courseVersionId,
+        cohortId,
+        session,
+      );
+
+      if (!progress) {
+        throw new NotFoundError('Progress not found');
+      }
+
+      if (progress.completed) {
+        throw new BadRequestError(
+          'This student has already completed the course',
+        );
+      }
+
+      const courseVersion = await this.courseRepo.readVersion(
+        courseVersionId,
+        session,
+      );
+      if (!courseVersion) {
+        throw new NotFoundError('Course version not found');
+      }
+
+      const itemId = progress.currentItem.toString();
+      const moduleId = progress.currentModule.toString();
+      const sectionId = progress.currentSection.toString();
+
+      await this.progressRepository.recordAdminSkip(
+        userId,
+        courseId,
+        courseVersionId,
+        {
+          itemId,
+          reason,
+          skippedBy,
+          skippedAt: new Date(),
+        },
+        cohortId,
+        session,
+      );
+
+      const advanced = await this.advanceProgressAfterItemCompletion(
+        userId,
+        courseId,
+        courseVersionId,
+        courseVersion,
+        moduleId,
+        sectionId,
+        itemId,
+        cohortId,
+        session,
+      );
+
+      if (!advanced) {
+        throw new InternalServerError(
+          'Could not advance progress — enrollment not found',
+        );
+      }
+
+      return true;
+    });
+  }
+
+  /**
+   * Reconcile watch sessions that were started but never stopped.
+   *
+   * Completion in ViBe is "a watchTime row with a non-null endTime", and only
+   * the stop API writes that field. When the stop call is lost — connection
+   * dropped as the video ended, tab closed, request timed out — the row stays
+   * open, the item never completes, and linear progression locks the student
+   * out of everything after it with no way forward from the UI.
+   *
+   * This closes such a row at its lastSeenAt heartbeat, but only when the
+   * resulting duration clears isValidWatchTime — the same bar the live stop
+   * path enforces. Someone who opened a video and walked away fails that check
+   * and stays incomplete, so this recovers lost progress without handing out
+   * completions and without weakening linear progression.
+   *
+   * Safe to run concurrently across instances and safe to re-run: closing is
+   * guarded on the row still being open, and the pointer only moves when it is
+   * still parked on the recovered item.
+   */
+  async recoverOrphanedWatchTimes(
+    olderThanMinutes = 30,
+    batchSize = 500,
+  ): Promise<{
+    scanned: number;
+    closed: number;
+    advanced: number;
+    rejected: number;
+    skipped: number;
+  }> {
+    const summary = {scanned: 0, closed: 0, advanced: 0, rejected: 0, skipped: 0};
+
+    const olderThan = new Date(Date.now() - olderThanMinutes * 60 * 1000);
+    const orphans = await this.progressRepository.findOrphanedWatchTimes(
+      olderThan,
+      batchSize,
+    );
+    summary.scanned = orphans.length;
+
+    // Rows judged not recoverable, marked in one write at the end so the next
+    // run does not re-examine them. Records that threw are deliberately left
+    // unmarked, so a transient database error gets another attempt next sweep.
+    const rejectedIds: (string | ObjectId)[] = [];
+
+    // A batch is usually many students spread over a handful of course
+    // versions, so the hidden-item lookup is cached rather than repeated per
+    // record.
+    const hiddenByVersion = new Map<string, Set<string>>();
+
+    for (const orphan of orphans) {
+      const itemId = orphan.itemId.toString();
+      const courseId = orphan.courseId.toString();
+      const courseVersionId = orphan.courseVersionId.toString();
+      const userId = orphan.userId.toString();
+      const cohortId = orphan.cohortId?.toString();
+
+      try {
+        // Without a heartbeat there is no evidence of time spent, so there is
+        // nothing to justify a completion.
+        if (!orphan.lastSeenAt) {
+          rejectedIds.push(orphan._id);
+          summary.skipped++;
+          continue;
+        }
+
+        const item = await this.itemRepo.readItemById(itemId);
+
+        // QUIZ and PROJECT completion depends on a submission this job must
+        // not invent; only watch-duration items can be judged from timestamps.
+        if (!item || !WATCH_TIME_RECOVERABLE_ITEMS.has(item.type)) {
+          rejectedIds.push(orphan._id);
+          summary.skipped++;
+          continue;
+        }
+
+        let hiddenItemIds = hiddenByVersion.get(courseVersionId);
+        if (!hiddenItemIds) {
+          const hiddenItems =
+            await this.progressRepository.getHiddenOrDeletedItems(
+              courseVersionId,
+            );
+          hiddenItemIds = new Set(hiddenItems.map(i => i.itemId.toString()));
+          hiddenByVersion.set(courseVersionId, hiddenItemIds);
+        }
+
+        if (hiddenItemIds.has(itemId)) {
+          rejectedIds.push(orphan._id);
+          summary.skipped++;
+          continue;
+        }
+
+        const endTime = new Date(orphan.lastSeenAt);
+
+        if (!this.isValidWatchTime({...orphan, endTime}, item)) {
+          rejectedIds.push(orphan._id);
+          summary.rejected++;
+          continue;
+        }
+
+        // The counters are derived from the return value rather than mutated
+        // inside the callback: _withTransaction retries on transient errors, and
+        // a retried body would otherwise count the same record twice.
+        const outcome = await this._withTransaction(async session => {
+          const closed = await this.progressRepository.closeOrphanedWatchTime(
+            orphan._id,
+            endTime,
+            session,
+          );
+
+          // Another instance got there first; its run owns the advance.
+          if (!closed) {
+            return {closed: false, advanced: false};
+          }
+
+          const progress = await this.progressRepository.findProgress(
+            userId,
+            courseId,
+            courseVersionId,
+            cohortId,
+          );
+
+          // If the pointer has already moved past this item, closing the row
+          // was the whole fix — the student is not stuck on it.
+          if (!progress || progress.currentItem?.toString() !== itemId) {
+            return {closed: true, advanced: false};
+          }
+
+          const courseVersion =
+            await this.courseRepo.readVersion(courseVersionId);
+          if (!courseVersion) {
+            return {closed: true, advanced: false};
+          }
+
+          const advanced = await this.advanceProgressAfterItemCompletion(
+            userId,
+            courseId,
+            courseVersionId,
+            courseVersion,
+            progress.currentModule.toString(),
+            progress.currentSection.toString(),
+            itemId,
+            cohortId,
+            session,
+          );
+
+          return {closed: true, advanced};
+        });
+
+        if (outcome?.closed) summary.closed++;
+        if (outcome?.advanced) summary.advanced++;
+      } catch (err) {
+        // One bad record must not stop the sweep.
+        console.error(
+          `[watchtime-recovery] Failed to recover watchTime ${orphan._id?.toString()} ` +
+            `(user ${userId}, item ${itemId}):`,
+          err,
+        );
+        summary.skipped++;
+      }
+    }
+
+    await this.progressRepository.markRecoveryAttempted(rejectedIds);
+
+    return summary;
+  }
+
+  /**
    * If this course version has a follow-up invite configured, create an
    * exclusive invite to the target course for the completing student. The
    * underlying invite creation dedupes pending invites and skips already-
@@ -2716,6 +3153,9 @@ class ProgressService extends BaseService {
         followUp.courseId.toString(),
         followUp.courseVersionId.toString(),
         followUp.cohortId?.toString(),
+        // System-initiated: there is no sender to check for admin. Whether a
+        // cohort is set was decided when the follow-up was configured.
+        true,
       );
     } catch (error) {
       // Never let follow-up invite failures break course completion.
@@ -2916,6 +3356,8 @@ class ProgressService extends BaseService {
       targetCourseId,
       targetVersionId,
       targetCohortId,
+      // Backfill of an already-configured follow-up; same reasoning as above.
+      true,
     );
 
     return summary;
@@ -4159,8 +4601,8 @@ class ProgressService extends BaseService {
     >();
     for (const enrollment of enrollments) {
       enrollmentMap.set(enrollment.userId?.toString(), {
-        completionPercentage: enrollment.percentCompleted || 0,
-        enrollmentDate: enrollment.enrollmentDate || null,
+        completionPercentage: enrollment.percentCompleted ?? 0,
+        enrollmentDate: enrollment.enrollmentDate ?? null,
       });
     }
 
@@ -4226,7 +4668,7 @@ class ProgressService extends BaseService {
       const enrollment = enrollmentMap.get(id);
       const completionPercentage = Math.min(
         100,
-        enrollment?.completionPercentage || 0,
+        enrollment?.completionPercentage ?? 0,
       );
       // Use the finish timestamp regardless of the legacy `completed` flag.
       const completedAt = progress.completedAt ?? null;
@@ -4857,7 +5299,7 @@ class ProgressService extends BaseService {
     const enrollmentMap = new Map();
     for (const enrollment of enrollments) {
       enrollmentMap.set(enrollment.userId.toString(), {
-        completionPercentage: enrollment.percentCompleted || 0,
+        completionPercentage: enrollment.percentCompleted ?? 0,
         enrolledAt: enrollment.enrollmentDate,
       });
     }
@@ -4906,7 +5348,7 @@ class ProgressService extends BaseService {
         userName: user?.name || 'Unknown User',
         email: user?.email || 'No email',
 
-        completionPercentage: Math.min(100, enrollment?.completionPercentage) ?? 0,
+        completionPercentage: Math.min(100, enrollment?.completionPercentage ?? 0),
 
         completedAt:
           progress.completed && progress.completedAt

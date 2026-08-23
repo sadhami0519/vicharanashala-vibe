@@ -30,7 +30,7 @@ export interface StudentQuestionSubmissionResult {
   suggestedFix?: string;
 }
 
-export type StudentQuestionStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type StudentQuestionStatus = 'PENDING' | 'HELD' | 'APPROVED' | 'REJECTED';
 
 /**
  * Peer-validation lifecycle state; only meaningful while status === 'PENDING'.
@@ -54,6 +54,8 @@ export interface StudentQuestionListItem {
   reviewedBy?: string;
   reviewedAt?: string;
   rejectionReason?: string;
+  /** Why an automated screen HELD this question — only set when status === 'HELD'. */
+  screeningMessage?: string;
   gateState?: StudentQuestionGateState;
   responseCount?: number;
   correctCount?: number;
@@ -67,11 +69,46 @@ export interface StudentQuestionListResponse {
 
 export type StudentQuestionStatusFilter =
   | 'PENDING'
+  | 'HELD'
   | 'APPROVED'
   | 'REJECTED'
   | 'ALL';
 
+/**
+ * Teacher-facing label per status — the DB name doesn't read as an action
+ * cue. PENDING is already live/served (not waiting on a teacher); HELD is
+ * the one that actually needs a decision.
+ */
+export const STUDENT_QUESTION_STATUS_LABELS: Record<StudentQuestionStatus, string> = {
+  PENDING: 'Live',
+  HELD: 'Needs review',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+};
+
 export type StudentQuestionGateStateFilter = StudentQuestionGateState | 'ALL';
+
+/**
+ * Read-only context for the segment a submission was made against, shown in
+ * the review screen's segment dialog. `quiz` is the quiz that would receive
+ * the question on approval; it is absent when no quiz follows the segment.
+ */
+export interface SegmentDetails {
+  segmentId: string;
+  name?: string;
+  description?: string;
+  type?: string;
+  videoDetails?: {
+    URL?: string;
+    startTime?: string;
+    endTime?: string;
+    points?: number;
+  };
+  quiz?: {
+    itemId: string;
+    name?: string;
+  };
+}
 
 export interface UpdateStudentQuestionPayload {
   questionText?: string;

@@ -30,6 +30,11 @@ export const appConfig = {
   // windows as FULFILLED/UNFULFILLED. Set ENABLE_FULFILLMENT_JOB='false' to stop.
   ENABLE_FULFILLMENT_JOB: env('ENABLE_FULFILLMENT_JOB') !== 'false',
   ENABLE_SPACED_REPETITION_JOB: env('ENABLE_SPACED_REPETITION_JOB') === 'true',
+  // Default OFF, unlike the jobs above: this one closes abandoned watch
+  // sessions and moves student progress forward, so it is switched on
+  // deliberately per environment after a dry run rather than on deploy.
+  ENABLE_WATCHTIME_RECOVERY_JOB:
+    env('ENABLE_WATCHTIME_RECOVERY_JOB') === 'true',
   GOOGLE_APPLICATION_CREDENTIALS: env('GOOGLE_APPLICATION_CREDENTIALS'),
   GCP_BACKUP_BUCKET: env('GCP_BACKUP_BUCKET'),
   GCP_BACKUP_ACTIVITY_BUCKET: env('GCP_BACKUP_ACTIVITY_BUCKET'),
@@ -48,7 +53,13 @@ export const appConfig = {
   },
   // Server-to-server integration API (e.g. external apps querying learner completions)
   integration: {
+    // Legacy single shared key. Still honoured so existing consumers keep
+    // working; prefer giving each consumer its own named key below.
     apiKey: env('INTEGRATION_API_KEY') || undefined,
+    // Named per-consumer keys, "name:key,name:key". Lets one consumer be
+    // revoked by deleting its entry, without rotating the key for everyone
+    // else, and makes each request attributable in the logs.
+    apiKeys: env('INTEGRATION_API_KEYS') || undefined,
   },
 };
 console.log(appConfig.url)

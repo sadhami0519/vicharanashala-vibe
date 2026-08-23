@@ -7,6 +7,7 @@ import {
   Get,
   HttpCode,
   JsonController,
+  NotFoundError,
   Params,
   Patch,
   Post,
@@ -154,7 +155,7 @@ export class StudentQuestionController {
     const questions = await this.service.listCourseVersionQuestions({
       courseId: params.courseId,
       courseVersionId: params.courseVersionId,
-      status: query.status as 'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL' | undefined,
+      status: query.status as 'PENDING' | 'HELD' | 'APPROVED' | 'REJECTED' | 'ALL' | undefined,
       gateState: query.gateState as 'COLLECTING' | 'ELIGIBLE' | undefined,
       limit: query.limit ?? 100,
     });
@@ -174,6 +175,7 @@ export class StudentQuestionController {
         reviewedBy: q.reviewedBy?.toString(),
         reviewedAt: q.reviewedAt?.toISOString(),
         rejectionReason: q.rejectionReason,
+        screeningMessage: q.status === 'HELD' ? q.screening?.message : undefined,
         gateState: q.gateState,
         responseCount: q.responseCount,
         correctCount: q.correctCount,
@@ -181,6 +183,19 @@ export class StudentQuestionController {
         thumbsDownCount: q.thumbsDownCount,
       })),
     };
+  }
+
+  @Authorized()
+  @Get('/courses/:courseId/versions/:courseVersionId/segments/:segmentId/details')
+  @HttpCode(200)
+  async getSegmentDetails(
+    @Params() params: StudentQuestionPathParams,
+  ): Promise<Record<string, unknown>> {
+    const details = await this.service.getSegmentDetails(params.segmentId);
+    if (!details) {
+      throw new NotFoundError('Segment not found.');
+    }
+    return details as unknown as Record<string, unknown>;
   }
 
   @Authorized()
