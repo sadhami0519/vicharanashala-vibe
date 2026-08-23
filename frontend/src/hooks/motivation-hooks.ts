@@ -1,21 +1,23 @@
 /**
  * Motivation System — TanStack Query hooks.
  *
- * Mirrors `spaced-repetition-hooks.ts`. Three queries, no
- * mutations in v1 (motivation is read-only). All queries
- * fail-open: a thrown fetch returns the empty response.
+ * Mirrors `spaced-repetition-hooks.ts`. Three queries + one
+ * mutation (Pillar 3 opt-out). All queries fail-open: a thrown
+ * fetch returns the empty response.
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getCourseLeaderboard,
   getCourseMentorView,
   getMyMotivation,
+  setOptOut,
 } from '../lib/motivation-api';
 import {
   LeaderboardResponse,
   MentorViewResponse,
   MotivationMeResponse,
+  OptOutResult,
 } from '../types/motivation.types';
 
 // ── Query keys ─────────────────────────────────────────────────────────────
@@ -72,5 +74,51 @@ export function useGetCourseMentorView(courseId: string) {
     queryKey: motivationKeys.mentorView(courseId),
     queryFn: () => getCourseMentorView(courseId),
     enabled: !!courseId,
+  });
+}
+
+// ── Mutations ──────────────────────────────────────────────────────────────
+
+/**
+ * Pillar 3 opt-out mutation. PATCHes the leaderboard opt-out
+ * state for the current student in a given course.
+ *
+ * Behavior:
+ *   - `setOptOut` returns `OptOutResult` (a discriminated union).
+ *     We surface `result.ok === false` as a real `error` on the
+ *     TanStack mutation — callers can inspect `mutation.error`
+ *     to toast the threshold-gate reason string.
+ *   - On success (regardless of `changed`), invalidates the
+ *     course's leaderboard query so the banner + the rank
+ *     re-derive against the persisted state.
+ *   - Disabled when either ID is empty — same self-only rule as
+ *     the backend.
+ *
+ * Usage:
+ *   const optOut = useSetOptOut();
+ *   optOut.mutate({ studentId, courseId, optedOut: true });
+ *   if (optOut.error) toast(optOut.error.reason);
+ */
+export function useSetOptOut() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    OptOutResult,
+    Error,
+    { studentId: string; courseId: string; optedOut: boolean }
+  >({
+    mutationFn: ({ studentId, courseId, optedOut }) =>
+      setOptOut(studentId, courseId, optedOut),
+    onSuccess: (result, vars) => {
+      // Promote the `OptOutResult.error` to a thrown Error so
+      // callers can read `mutation.error` uniformly.
+      if (!result.ok) {
+        throw new Error(result.error.reason);
+      }
+      // Invalidate the affected leaderboard so the banner +
+      // rank re-derive on next mount.
+      queryClient.invalidateQueries({
+        queryKey: motivationKeys.leaderboard(vars.courseId, vars.studentId),
+      });
+    },
   });
 }

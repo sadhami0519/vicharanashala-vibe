@@ -116,3 +116,24 @@ export interface MotivationResponse {
   status: StatusSnapshot[];
   asOf: Date;
 }
+
+// ── Pillar 3 opt-out ──────────────────────────────────────────────────────────
+
+/**
+ * Response shape for `PATCH /motivation/students/:studentId/courses/:courseId/opt-out`.
+ *
+ *   - `optedOut`: the desired new state (echoes the request body).
+ *   - `changed`: true if the underlying write actually modified state.
+ *     false on idempotent no-op (student was already in this state).
+ *   - `optedOutAt`: timestamp of the upserted doc when opting out,
+ *     null when opting back in (doc no longer exists).
+ *
+ * Added 2026-07-25 for Pillar 3.
+ */
+export interface OptOutResponse {
+  studentId: string;
+  courseId: string;
+  optedOut: boolean;
+  changed: boolean;
+  optedOutAt: Date | null;
+}

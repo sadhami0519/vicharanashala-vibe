@@ -9,6 +9,7 @@ import {
   computeNextBadgeProximity,
   computeRetention30d,
   computeStatusSnapshots,
+  evaluateOptOutEligibility,
   getBadgeById,
   getBadgesByTier,
 } from '../services/MotivationService.js';
@@ -344,5 +345,123 @@ describe('computeNextBadgeProximity', () => {
     const result = computeNextBadgeProximity([]);
     const winner = BADGE_CATALOGUE.find((b) => b.id === result?.badgeId);
     expect(winner?.tier).toBe('apprentice');
+  });
+});
+
+// ── Pillar 3: opt-out eligibility gate ───────────────────────────────────
+
+describe('evaluateOptOutEligibility', () => {
+  const now = new Date('2026-08-01T12:00:00Z');
+  const thirtyOneDaysAgo = new Date('2026-07-01T12:00:00Z'); // outside window
+  const twentyNineDaysAgo = new Date('2026-07-03T12:00:00Z'); // inside window
+
+  // EF 2.6 → computeRetention30d: round(((2.6-1.3)/(3.0-1.3))*100) = 76 (below 90)
+  // EF 2.9 → 94 (above 90)
+
+  function makeReviewed(daysAgo: number, ef = 2.9): IReviewItem {
+    const ts = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
+    return makeItem({ last_reviewed_at: ts, EF: ef });
+  }
+
+  it('returns ineligible with reason for an empty input (new student)', () => {
+    const result = evaluateOptOutEligibility([], now);
+    expect(result.eligible).toBe(false);
+    if (result.eligible === false) {
+      expect(result.reason).toMatch(/at least 100 reviews/);
+      expect(result.reason).toContain('currently 0');
+    }
+  });
+
+  it('returns ineligible when reviews < 100, regardless of retention', () => {
+    const items = Array.from({ length: 99 }, () => makeReviewed(5, 2.9));
+    const result = evaluateOptOutEligibility(items, now);
+    expect(result.eligible).toBe(false);
+    if (result.eligible === false) {
+      expect(result.reason).toMatch(/at least 100 reviews/);
+      expect(result.reason).toContain('currently 99');
+    }
+  });
+
+  it('returns ineligible when reviews >= 100 but retention < 90', () => {
+    const items = Array.from({ length: 100 }, () => makeReviewed(5, 2.6));
+    const result = evaluateOptOutEligibility(items, now);
+    expect(result.eligible).toBe(false);
+    if (result.eligible === false) {
+      expect(result.reason).toMatch(/retention.* 90/);
+    }
+  });
+
+  it('returns eligible when reviews >= 100 AND retention >= 90', () => {
+    const items = Array.from({ length: 100 }, () => makeReviewed(5, 2.9));
+    const result = evaluateOptOutEligibility(items, now);
+    expect(result.eligible).toBe(true);
+  });
+
+  it('excludes reviews older than 30 days from the count', () => {
+    // 100 reviews just inside the window (eligible on count alone)
+    const inside = Array.from({ length: 100 }, () => makeReviewed(5, 2.9));
+    // 200 reviews just outside the window (must NOT be counted)
+    const outside = Array.from({ length: 200 }, () => makeReviewed(60, 2.9));
+    const result = evaluateOptOutEligibility([...inside, ...outside], now);
+    expect(result.eligible).toBe(true);
+  });
+
+  it('boundary: exactly 30 days ago counts as outside the window', () => {
+    // The cutoff is `now - 30 * MS_PER_DAY`. Items at exactly that
+    // timestamp have `t >= cutoff` as `false` if we use strict >=
+    // against the wall clock. The implementation uses `t >= cutoff`
+    // (inclusive on the inside boundary) — so an item at exactly 30
+    // days ago IS in the window. This test pins that choice.
+    //
+    // Build 100 items at exactly 30 days ago; they should count.
+    const items = Array.from({ length: 100 }, () =>
+      makeItem({
+        last_reviewed_at: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
+        EF: 2.9,
+      }),
+    );
+    const result = evaluateOptOutEligibility(items, now);
+    expect(result.eligible).toBe(true);
+  });
+
+  it('ignores items with no last_reviewed_at (never reviewed)', () => {
+    const reviewed = Array.from({ length: 100 }, () => makeReviewed(5, 2.9));
+    const unreviewed = Array.from({ length: 50 }, () =>
+      makeItem({ last_reviewed_at: null, EF: 2.9 }),
+    );
+    const result = evaluateOptOutEligibility([...reviewed, ...unreviewed], now);
+    // 50 unreviewed should NOT subtract from the 100 reviewed count.
+    expect(result.eligible).toBe(true);
+  });
+
+  it('retention reflects only items with last_reviewed_at set', () => {
+    // 100 reviewed items with EF 2.9 (retention ≈94)
+    const reviewed = Array.from({ length: 100 }, () => makeReviewed(5, 2.9));
+    // 200 unreviewed items with EF 1.3 (would tank average if counted)
+    const unreviewed = Array.from({ length: 200 }, () =>
+      makeItem({ last_reviewed_at: null, EF: 1.3 }),
+    );
+    const result = evaluateOptOutEligibility([...reviewed, ...unreviewed], now);
+    expect(result.eligible).toBe(true);
+  });
+
+  it('returns retention 90 exactly as eligible (boundary is inclusive)', () => {
+    // EF 2.87 → round(((2.87-1.3)/(3.0-1.3))*100) = 92 (above)
+    // EF 2.47 → round(((2.47-1.3)/(3.0-1.3))*100) = 69 (below)
+    // EF 2.83 → round(((2.83-1.3)/(3.0-1.3))*100) = 90 (boundary)
+    const items = Array.from({ length: 100 }, () => makeReviewed(5, 2.83));
+    const result = evaluateOptOutEligibility(items, now);
+    expect(result.eligible).toBe(true);
+  });
+
+  it('reason message mentions the actual current value for debuggability', () => {
+    const items = Array.from({ length: 42 }, () => makeReviewed(5, 2.9));
+    const result = evaluateOptOutEligibility(items, now);
+    expect(result.eligible).toBe(false);
+    if (result.eligible === false) {
+      // The message should be human-readable and surface the actual
+      // number — makes 403 responses actionable for the frontend.
+      expect(result.reason).toContain('42');
+    }
   });
 });

@@ -183,6 +183,8 @@ export function MotivationPanel({
                   ? undefined
                   : 'No course selected. Open from a course page.'
               }
+              studentId={studentId}
+              courseId={courseId}
             />
           )}
           {tab === 'mentor' && isMentor && (
