@@ -45,7 +45,12 @@ function makeRepo(): UserDirectoryRepository {
 
 async function insertUsers(users: Partial<IUser>[]): Promise<void> {
   const col = inMemoryDb.collection('users');
-  await col.insertMany(users as IUser[]);
+  // IUser._id is `string | ObjectId | null`, but Mongo's insertMany
+  // expects `OptionalId<Document>` whose `_id` is `ObjectId`. Cast
+  // through unknown to bypass the structural mismatch — these are
+  // test fixtures and the inserted shapes are controlled by the
+  // test cases below.
+  await col.insertMany(users as unknown as Parameters<typeof col.insertMany>[0]);
 }
 
 const UID_A = 'uid_a_001';
