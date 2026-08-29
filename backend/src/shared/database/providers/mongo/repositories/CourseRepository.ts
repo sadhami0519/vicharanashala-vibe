@@ -1647,10 +1647,11 @@ export class CourseRepository implements ICourseRepository {
   ): Promise<boolean> {
     try {
       await this.init();
+      const userObjectId = new ObjectId(userId);
       const doc = await this.courseCollection.findOne(
         {
           _id: new ObjectId(courseId),
-          mentorIds: userId,
+          $or: [{instructors: userObjectId}, {mentorIds: userObjectId}],
         },
         {projection: {_id: 1}, session},
       );

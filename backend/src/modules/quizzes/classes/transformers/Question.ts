@@ -383,7 +383,7 @@ export function toReviewQuestionResponse(
     case 'ORDER_THE_LOTS': {
       options = (question.ordering ?? [])
         .slice()
-        .sort((a: {order: number}, b: {order: number}) => a.order - b.order)
+        .sort((a: {order: number}, b: {order: number}) => b.order - a.order)
         .map((o: {lotItem: {text: string}}) => ({
           key: '',
           text: o.lotItem.text,

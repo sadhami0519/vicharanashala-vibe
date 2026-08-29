@@ -95,8 +95,8 @@ describe('CourseRepository.isMentorOnCourse', () => {
     await insertCourse({instructors: [INSTRUCTOR_ID]});
     const repo = makeRepo();
     const allowed = await repo.isMentorOnCourse(
-      INSTRUCTOR_ID.toString(),
       COURSE_ID.toString(),
+      INSTRUCTOR_ID.toString(),
     );
     expect(allowed).toBe(true);
   });
@@ -105,8 +105,8 @@ describe('CourseRepository.isMentorOnCourse', () => {
     await insertCourse({mentorIds: [MENTOR_ID]});
     const repo = makeRepo();
     const allowed = await repo.isMentorOnCourse(
-      MENTOR_ID.toString(),
       COURSE_ID.toString(),
+      MENTOR_ID.toString(),
     );
     expect(allowed).toBe(true);
   });
@@ -118,8 +118,8 @@ describe('CourseRepository.isMentorOnCourse', () => {
     });
     const repo = makeRepo();
     const allowed = await repo.isMentorOnCourse(
-      RANDOM_USER_ID.toString(),
       COURSE_ID.toString(),
+      RANDOM_USER_ID.toString(),
     );
     expect(allowed).toBe(false);
   });
@@ -134,14 +134,14 @@ describe('CourseRepository.isMentorOnCourse', () => {
     const repo = makeRepo();
     expect(
       await repo.isMentorOnCourse(
-        INSTRUCTOR_ID.toString(),
         COURSE_ID.toString(),
+        INSTRUCTOR_ID.toString(),
       ),
     ).toBe(true);
     expect(
       await repo.isMentorOnCourse(
-        RANDOM_USER_ID.toString(),
         COURSE_ID.toString(),
+        RANDOM_USER_ID.toString(),
       ),
     ).toBe(false);
   });
@@ -149,8 +149,8 @@ describe('CourseRepository.isMentorOnCourse', () => {
   it('returns false when the course does not exist', async () => {
     const repo = makeRepo();
     const allowed = await repo.isMentorOnCourse(
-      RANDOM_USER_ID.toString(),
       COURSE_ID.toString(),
+      RANDOM_USER_ID.toString(),
     );
     expect(allowed).toBe(false);
   });
@@ -164,8 +164,8 @@ describe('CourseRepository.isMentorOnCourse', () => {
     });
     const repo = makeRepo();
     const allowed = await repo.isMentorOnCourse(
-      INSTRUCTOR_ID.toString(),
       COURSE_ID.toString(),
+      INSTRUCTOR_ID.toString(),
     );
     expect(allowed).toBe(true);
   });
@@ -176,8 +176,8 @@ describe('CourseRepository.isMentorOnCourse', () => {
     await insertCourse({instructors: [INSTRUCTOR_ID]});
     const repo = makeRepo();
     const allowed = await repo.isMentorOnCourse(
-      INSTRUCTOR_ID.toString(), // explicit string
-      COURSE_ID.toString(),
+      COURSE_ID.toString(), // explicit string
+      INSTRUCTOR_ID.toString(),
     );
     expect(allowed).toBe(true);
   });
