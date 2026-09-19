@@ -11,7 +11,9 @@ export type NotificationType =
   | 'appeal_rejected'
   | 'mcq_submission_approved'
   | 'mcq_submission_rejected'
-  | 'review_reminder';
+  | 'review_reminder'
+  | 'case_response_weak_streak'
+  | 'case_response_withdrawn';
 
 export interface INotification {
   _id?: ObjectId | string;

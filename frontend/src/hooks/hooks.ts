@@ -2215,6 +2215,9 @@ export function useEditProctoringSettings() {
     baseHp: number,
     randomizeItems: boolean,
     crowdsourcedQuestionSubmissionEnabled: boolean = false,
+    caseStudiesEnabled: boolean = false,
+    caseStudyStrictUnlockEnabled: boolean = true,
+    caseStudyWeakStreakThreshold: number = 3,
   ) => {
     setLoading(true);
     setError(null);
@@ -2237,6 +2240,9 @@ export function useEditProctoringSettings() {
         baseHp,
         randomizeItems,
         crowdsourcedQuestionSubmissionEnabled,
+        caseStudiesEnabled,
+        caseStudyStrictUnlockEnabled,
+        caseStudyWeakStreakThreshold,
       };
 
       const res = await fetch(url, {
