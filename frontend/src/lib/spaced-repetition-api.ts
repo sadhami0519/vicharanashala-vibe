@@ -13,7 +13,7 @@
 import { recordReviewToday, clearStreak } from './streak';
 
 // â”€â”€ Toggle this to false when the backend is ready â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const USE_MOCK = true;
+const USE_MOCK = false;
 const BASE_URL = import.meta.env.VITE_BASE_URL ?? '';
 
 // â”€â”€ Mock state persistence (localStorage) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
